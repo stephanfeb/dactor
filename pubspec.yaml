@@ -1,7 +1,7 @@
 name: dactor
 description: An actor system for Dart
 version: 1.1.0
-# repository: https://github.com/my_org/my_repo
+repository: https://github.com/stephanfeb/dactor
 
 environment:
   sdk: ^3.5.1
