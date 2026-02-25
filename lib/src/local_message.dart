@@ -3,6 +3,8 @@ import 'package:dactor/src/message.dart';
 import 'package:uuid/uuid.dart';
 
 class LocalMessage implements Message {
+  static const _uuid = Uuid();
+
   @override
   final String correlationId;
   @override
@@ -22,7 +24,7 @@ class LocalMessage implements Message {
     this.replyTo,
     DateTime? timestamp,
     Map<String, dynamic>? metadata,
-  })  : correlationId = correlationId ?? Uuid().v4(),
+  })  : correlationId = correlationId ?? _uuid.v4(),
         timestamp = timestamp ?? DateTime.now(),
         metadata = metadata ?? {};
 }

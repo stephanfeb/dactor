@@ -33,7 +33,6 @@ class RouterActor extends SupervisorActor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (_workers.isEmpty) {
-      print('[Router] No workers available for router ${context.self.id}');
       return;
     }
 
@@ -45,9 +44,7 @@ class RouterActor extends SupervisorActor {
   @override
   Future<SupervisionDecision> onChildFailure(
       ActorRef child, Object error, StackTrace stackTrace) async {
-    // For now, we'll just restart the child.
-    // A more advanced implementation could use a different strategy.
-    context.restart(child);
+    await context.restart(child);
     return SupervisionDecision.restart;
   }
 }

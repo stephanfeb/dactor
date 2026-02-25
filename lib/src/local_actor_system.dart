@@ -12,7 +12,7 @@ import 'package:dactor/src/mailbox.dart';
 import 'package:dactor/src/metrics/metrics.dart';
 import 'package:dactor/src/logging/logging.dart';
 import 'package:dactor/src/ask_config.dart';
-import 'tracing/tracing.dart';
+import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor/src/supervision.dart';
 import 'package:dactor/src/routing/pool.dart';
 import 'package:dactor/src/routing/router_actor.dart';
@@ -31,9 +31,10 @@ class _ActorInfo {
 class LocalActorSystem implements ActorSystem {
   final _actors = <String, LocalActorRef>{};
   final _actorInfo = <String, _ActorInfo>{};
-  final _factoriesByType = <Type, Function>{};
-  final _stoppingActors = <String, Completer>{};
+  final _factoriesById = <String, Function>{};
   final _activeMailboxes = Queue<Mailbox>();
+  final _scheduledMailboxes = <Mailbox>{};
+  final _processingActors = <String>{};
   late final DeadLetterQueue deadLetterQueue;
   late final EventBus _eventBus;
   @override
@@ -42,19 +43,21 @@ class LocalActorSystem implements ActorSystem {
   final TraceCollector tracer;
   @override
   final LogCollector logger;
-  
+
   /// Configuration for ask pattern behavior.
   final AskConfig askConfig;
-  
+
   bool _isShutdown = false;
   bool _isProcessing = false;
+  Completer<void> _pumpSignal = Completer<void>();
 
   LocalActorSystem([ActorSystemConfig? config])
       : metrics = config?.metricsCollector ?? InMemoryMetricsCollector(),
         tracer = config?.traceCollector ?? InMemoryTraceCollector(),
         logger = config?.logCollector ?? ConsoleLogCollector(),
         askConfig = config?.askConfig ?? AskConfig() {
-    deadLetterQueue = DeadLetterQueue(metrics);
+    deadLetterQueue = DeadLetterQueue(metrics,
+        maxSize: config?.deadLetterQueueMaxSize ?? 1000);
     _eventBus = EventBus();
     _messagePump();
   }
@@ -97,24 +100,22 @@ class LocalActorSystem implements ActorSystem {
     }
 
     final actor = actorFactory();
-    final mailbox = Mailbox(id, this);
+    final mailbox = Mailbox(id, scheduleMailbox, onGauge: metrics.gauge);
     final actorRef = LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
 
     _actors[id] = actorRef;
     _actorInfo[id] = _ActorInfo(actor, supervision);
-    if (!_factoriesByType.containsKey(T)) {
-      _factoriesByType[T] = actorFactory;
-    }
+    _factoriesById[id] = actorFactory;
 
-    _runActor(actor, actorRef);
+    await _runActor(actor, actorRef);
 
     return (ref: actorRef, actor: actor);
   }
 
-  void _runActor(Actor actor, LocalActorRef actorRef) {
+  Future<void> _runActor(Actor actor, LocalActorRef actorRef) async {
     final context = _ActorContext(actorRef, this);
     actor.context = context;
-    actor.preStart();
+    await actor.preStart();
     metrics.increment('actors.spawned');
     metrics.gauge('actors.active', _actors.length.toDouble());
   }
@@ -124,25 +125,25 @@ class LocalActorSystem implements ActorSystem {
     while (!_isShutdown) {
       if (_activeMailboxes.isNotEmpty) {
         final mailbox = _activeMailboxes.removeFirst();
-        
+        _scheduledMailboxes.remove(mailbox);
+
         if (mailbox.isDisposed) {
           continue;
         }
 
         final message = mailbox.dequeue();
-        
         final info = _actorInfo[mailbox.actorId];
-        
+
         if (message != null && info != null) {
           metrics.increment('messages.processed');
           final actor = info.actor;
           final actorRef = _actors[mailbox.actorId]!;
-          
-          // ELEGANT FIX: Process message asynchronously without blocking the pump
+
+          _processingActors.add(mailbox.actorId);
           _processMessageAsync(actor, actorRef, message, mailbox);
         }
       } else {
-        await Future.delayed(const Duration(milliseconds: 1));
+        await _waitForWork();
       }
     }
     _isProcessing = false;
@@ -153,8 +154,7 @@ class LocalActorSystem implements ActorSystem {
   /// causing deadlocks in the single-threaded message pump.
   void _processMessageAsync(Actor actor, LocalActorRef actorRef, Message message, Mailbox mailbox) {
     final stopwatch = Stopwatch()..start();
-    
-    // Process the message asynchronously - don't await this!
+
     () async {
       try {
         if (message is LocalMessage) {
@@ -173,7 +173,7 @@ class LocalActorSystem implements ActorSystem {
         if (supervisorId != null && _actorInfo.containsKey(supervisorId)) {
           final supervisor =
               _actorInfo[supervisorId]!.actor as SupervisorActor;
-          supervisor.onChildFailure(actorRef, e, s);
+          await supervisor.onChildFailure(actorRef, e, s);
         } else {
           stop(actorRef);
         }
@@ -181,8 +181,9 @@ class LocalActorSystem implements ActorSystem {
         stopwatch.stop();
         metrics.timing('messages.processing_time', stopwatch.elapsed);
         (actor.context as _ActorContext).sender = null;
-        
-        // Check if there are more messages to process after this one completes
+
+        _processingActors.remove(mailbox.actorId);
+
         if (!mailbox.isEmpty && !mailbox.isDisposed) {
           scheduleMailbox(mailbox);
         }
@@ -191,18 +192,32 @@ class LocalActorSystem implements ActorSystem {
   }
 
   void scheduleMailbox(Mailbox mailbox) {
-    
-    if (!_activeMailboxes.contains(mailbox)) {
+    if (_processingActors.contains(mailbox.actorId)) {
+      return;
+    }
+    if (_scheduledMailboxes.add(mailbox)) {
       _activeMailboxes.add(mailbox);
-    } 
+      _wakeUpPump();
+    }
   }
 
-  void _restartActor(String id) async {
+  void _wakeUpPump() {
+    if (!_pumpSignal.isCompleted) {
+      _pumpSignal.complete();
+    }
+  }
+
+  Future<void> _waitForWork() async {
+    _pumpSignal = Completer<void>();
+    await _pumpSignal.future;
+  }
+
+  Future<void> _restartActor(String id) async {
     final actorRef = _actors[id];
     final info = _actorInfo[id];
     if (actorRef != null && info != null) {
       metrics.increment('actors.restarted', tags: {'actorId': id});
-      final actorFactory = _factoriesByType[info.actor.runtimeType];
+      final actorFactory = _factoriesById[id];
       if (actorFactory != null) {
         final supervision = info.supervision;
         await stop(actorRef);
@@ -221,26 +236,22 @@ class LocalActorSystem implements ActorSystem {
     if (actorRef is LocalActorRef) {
       final info = _actorInfo[actor.id];
       if (info != null) {
-        // Clean up timers before stopping the actor
         final timerScheduler = info.actor.context.timers;
         if (timerScheduler is DactorTimerScheduler) {
           timerScheduler.dispose();
         }
-        
+
         info.actor.postStop();
       }
 
-      // Clean up event bus subscriptions for this actor
       _eventBus.cleanup(actorRef);
 
       actorRef.stop();
       _actors.remove(actor.id);
       _actorInfo.remove(actor.id);
+      _factoriesById.remove(actor.id);
       metrics.gauge('actors.active', _actors.length.toDouble());
       metrics.increment('actors.stopped');
-
-      final completer = _stoppingActors.remove(actor.id);
-      completer?.complete();
     } else {
       metrics.increment('actors.stop_failed');
       deadLetterQueue.enqueue(
@@ -262,13 +273,14 @@ class LocalActorSystem implements ActorSystem {
       return;
     }
     _isShutdown = true;
+    _wakeUpPump();
     metrics.increment('system.shutdown');
     for (final actorRef in List.from(_actors.values)) {
       await stop(actorRef);
     }
     _actors.clear();
     _actorInfo.clear();
-    _factoriesByType.clear();
+    _factoriesById.clear();
     deadLetterQueue.dispose();
     _eventBus.dispose();
   }
@@ -296,12 +308,12 @@ class _ActorContext implements ActorContext {
 
   @override
   void watch(ActorRef actor) {
-    // TODO: implement watch
+    actor.watch(self);
   }
 
   @override
-  void restart(ActorRef child) {
-    system._restartActor(child.id);
+  Future<void> restart(ActorRef child) {
+    return system._restartActor(child.id);
   }
 
   @override

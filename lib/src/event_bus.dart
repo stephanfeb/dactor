@@ -1,8 +1,7 @@
 import 'dart:async';
-import 'dart:collection';
 
-import 'actor_ref.dart';
-import 'local_message.dart';
+import 'package:dactor/src/actor_ref.dart';
+import 'package:dactor/src/local_message.dart';
 
 /// A message to subscribe to events of a specific type.
 class Subscribe<T> {
@@ -127,30 +126,10 @@ class EventBus {
     _eventController.add(EventBusEvent.published(eventType, event, subscribers.length));
   }
 
-  /// Get all subscribers for a given event type, including inheritance hierarchy.
+  /// Get all subscribers for a given event type.
+  /// Only exact type matching is supported.
   Set<ActorRef> _getSubscribersForType(Type eventType) {
-    final subscribers = <ActorRef>{};
-    
-    // Add direct subscribers
-    subscribers.addAll(_subscriptions[eventType] ?? {});
-    
-    // Add subscribers to supertypes (inheritance support)
-    for (final subscriptionType in _subscriptions.keys) {
-      if (_isSubtypeOf(eventType, subscriptionType)) {
-        subscribers.addAll(_subscriptions[subscriptionType] ?? {});
-      }
-    }
-    
-    return subscribers;
-  }
-
-  /// Check if [subtype] is a subtype of [supertype].
-  /// This is a simplified implementation - in a full implementation,
-  /// you might want to use reflection or a more sophisticated type system.
-  bool _isSubtypeOf(Type subtype, Type supertype) {
-    // For now, we only support exact type matching
-    // In the future, this could be enhanced to support inheritance
-    return subtype == supertype;
+    return Set.of(_subscriptions[eventType] ?? {});
   }
 
   /// Remove all subscriptions for a given actor.

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/dead_letter_queue.dart';
@@ -8,9 +7,7 @@ import 'package:dactor/src/local_message.dart';
 import 'package:dactor/src/message.dart';
 import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor/src/ask_config.dart';
-import 'system_messages.dart';
-
-import 'package:dactor/src/actor.dart';
+import 'package:dactor/src/system_messages.dart';
 
 class LocalActorRef implements ActorRef {
   @override
@@ -21,7 +18,6 @@ class LocalActorRef implements ActorRef {
   final AskConfig _askConfig;
   final _watchers = <ActorRef>[];
   bool _isAlive = true;
-  StreamSubscription? _subscription;
 
   LocalActorRef(this.id, this._mailbox, this._deadLetterQueue, this._tracer, this._askConfig);
 
@@ -30,30 +26,26 @@ class LocalActorRef implements ActorRef {
 
   @override
   void tell(Message message, {ActorRef? sender}) {
-
     if (_isAlive) {
-      final localMessage = message is LocalMessage
-          ? message
-          : LocalMessage(payload: message, sender: sender);
+      final LocalMessage localMessage;
+      if (message is LocalMessage) {
+        localMessage = (sender != null)
+            ? LocalMessage(
+                payload: message.payload,
+                sender: sender,
+                correlationId: message.correlationId,
+                replyTo: message.replyTo,
+                timestamp: message.timestamp,
+                metadata: message.metadata,
+              )
+            : message;
+      } else {
+        localMessage = LocalMessage(payload: message, sender: sender);
+      }
 
       _tracer.record(TraceEvent(
           localMessage.correlationId, 'sent', this, localMessage.payload));
-
-      // Create the message to enqueue, preserving correlationId and structure
-      final messageToEnqueue = message is LocalMessage
-          ? (sender != null 
-              ? LocalMessage(
-                  payload: localMessage.payload,
-                  sender: sender,
-                  correlationId: localMessage.correlationId,
-                  replyTo: localMessage.replyTo,
-                  timestamp: localMessage.timestamp,
-                  metadata: localMessage.metadata,
-                )
-              : localMessage)
-          : LocalMessage(payload: message, sender: sender);
-
-      _mailbox.enqueue(messageToEnqueue);
+      _mailbox.enqueue(localMessage);
     } else {
       final lMessage = message is LocalMessage ? message : LocalMessage(payload: message);
       _deadLetterQueue.enqueue(
@@ -90,12 +82,10 @@ class LocalActorRef implements ActorRef {
         lastError = error;
         attemptCount++;
 
-        // Get correlation ID safely for tracing
-        final correlationId = message is LocalMessage 
-            ? message.correlationId 
+        final correlationId = message is LocalMessage
+            ? message.correlationId
             : 'ask_${DateTime.now().millisecondsSinceEpoch}';
 
-        // If retries are disabled or we've exhausted all attempts, throw the error
         if (!effectiveEnableRetries || attemptCount > effectiveMaxRetries) {
           _tracer.record(TraceEvent(
             correlationId,
@@ -110,7 +100,6 @@ class LocalActorRef implements ActorRef {
           rethrow;
         }
 
-        // Check if this error type is retryable
         if (!_askConfig.isRetryableError(error)) {
           _tracer.record(TraceEvent(
             correlationId,
@@ -124,9 +113,8 @@ class LocalActorRef implements ActorRef {
           rethrow;
         }
 
-        // Calculate backoff duration and wait before retry
         final backoffDuration = _askConfig.calculateBackoff(attemptCount);
-        
+
         _tracer.record(TraceEvent(
           correlationId,
           'ask_retry',
@@ -145,7 +133,6 @@ class LocalActorRef implements ActorRef {
       }
     }
 
-    // This should never be reached, but just in case
     throw lastError ?? StateError('Ask operation failed after all retries');
   }
 
@@ -159,7 +146,6 @@ class LocalActorRef implements ActorRef {
     final completer = Completer<T>();
     final tempRef = _TemporaryActorRef<T>(completer, attemptNumber);
 
-    // Handle both Message and LocalMessage types safely
     final request = message is LocalMessage
         ? LocalMessage(
             payload: message.payload,
@@ -198,10 +184,6 @@ class LocalActorRef implements ActorRef {
   @override
   void watch(ActorRef watcher) {
     _watchers.add(watcher);
-  }
-
-  void setSubscription(StreamSubscription subscription) {
-    _subscription = subscription;
   }
 
   void stop() {
@@ -251,7 +233,6 @@ class _TemporaryActorRef<T> implements ActorRef {
                     'Exception: $e')
         );
       }
-    } else {
     }
   }
 

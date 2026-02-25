@@ -16,13 +16,15 @@ class OneForOneStrategy implements SupervisionStrategy {
         _within = within;
 
   @override
-  SupervisionDecision handle(Object error, StackTrace stackTrace) {
+  bool get restartAll => false;
+
+  @override
+  SupervisionDecision handle(String actorId, Object error, StackTrace stackTrace) {
     final now = DateTime.now();
-    final actorId = stackTrace.toString(); // A bit of a hack to get a unique id
 
     if (_within != null) {
       final lastRetry = _timestamps[actorId];
-      if (lastRetry != null && now.difference(lastRetry) > _within!) {
+      if (lastRetry != null && now.difference(lastRetry) > _within) {
         _retries[actorId] = 0;
       }
     }

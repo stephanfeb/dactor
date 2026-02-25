@@ -1,14 +1,13 @@
 import 'package:dactor/src/routing/pool.dart';
-import 'ask_config.dart';
-
-import 'actor.dart';
-import 'metrics/metrics.dart';
-import 'tracing/tracing.dart';
-import 'logging/logging.dart';
-import 'actor_ref.dart';
-import 'local_actor_system.dart';
-import 'supervision.dart';
-import 'event_bus.dart';
+import 'package:dactor/src/ask_config.dart';
+import 'package:dactor/src/actor.dart';
+import 'package:dactor/src/metrics/metrics.dart';
+import 'package:dactor/src/tracing/tracing.dart';
+import 'package:dactor/src/logging/logging.dart';
+import 'package:dactor/src/actor_ref.dart';
+import 'package:dactor/src/local_actor_system.dart';
+import 'package:dactor/src/supervision.dart';
+import 'package:dactor/src/event_bus.dart';
 
 /// A system for managing actors.
 ///
@@ -57,15 +56,19 @@ class ActorSystemConfig {
   final MetricsCollector? metricsCollector;
   final TraceCollector? traceCollector;
   final LogCollector? logCollector;
-  
+
   /// Configuration for ask pattern behavior including timeouts and retries.
   final AskConfig askConfig;
+
+  /// Maximum size of the dead letter queue before oldest entries are evicted.
+  final int deadLetterQueueMaxSize;
 
   ActorSystemConfig({
     this.metricsCollector,
     this.traceCollector,
     this.logCollector,
     AskConfig? askConfig,
+    this.deadLetterQueueMaxSize = 1000,
   }) : askConfig = askConfig ?? AskConfig();
 
   /// Creates a development-friendly configuration with longer timeouts and more retries.

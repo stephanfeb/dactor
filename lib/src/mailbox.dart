@@ -1,29 +1,31 @@
 import 'dart:collection';
 
-import 'package:dactor/src/local_actor_system.dart';
 import 'package:dactor/src/message.dart';
 
 class Mailbox {
   final String actorId;
-  final LocalActorSystem _system;
+  final void Function(Mailbox mailbox) _onSchedule;
+  final void Function(String name, double value, {Map<String, String>? tags})? _onGauge;
   final _queue = Queue<Message>();
   bool _isDisposed = false;
 
-  Mailbox(this.actorId, this._system);
+  Mailbox(this.actorId, this._onSchedule, {
+    void Function(String name, double value, {Map<String, String>? tags})? onGauge,
+  }) : _onGauge = onGauge;
 
   void enqueue(Message message) {
     if (!_isDisposed) {
       _queue.add(message);
-      _system.metrics.gauge('mailbox.size', _queue.length.toDouble(),
+      _onGauge?.call('mailbox.size', _queue.length.toDouble(),
           tags: {'actorId': actorId});
-      _system.scheduleMailbox(this);
+      _onSchedule(this);
     }
   }
 
   Message? dequeue() {
     if (_queue.isNotEmpty) {
       final message = _queue.removeFirst();
-      _system.metrics.gauge('mailbox.size', _queue.length.toDouble(),
+      _onGauge?.call('mailbox.size', _queue.length.toDouble(),
           tags: {'actorId': actorId});
       return message;
     }

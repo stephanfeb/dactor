@@ -1,7 +1,6 @@
 import 'package:dactor/src/actor.dart';
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/local_actor_system.dart';
-import 'package:dactor/src/message.dart';
 import 'package:dactor/src/supervision.dart';
 
 class SupervisorActor extends Actor implements Supervisor {
@@ -22,7 +21,6 @@ class SupervisorActor extends Actor implements Supervisor {
     String id,
     T Function() actorFactory,
   ) async {
-    print('Supervisor ${context.self.id} supervising new child: $id');
     final actorRef = await (context.system as LocalActorSystem).spawn(
       '${context.self.id}/$id',
       actorFactory,
@@ -39,16 +37,39 @@ class SupervisorActor extends Actor implements Supervisor {
     Object error,
     StackTrace stackTrace,
   ) async {
-    final decision = strategy.handle(error, stackTrace);
+    final decision = strategy.handle(child.id, error, stackTrace);
     if (decision == SupervisionDecision.restart) {
-      final childrenToRestart = List.of(_children.entries);
-      for (final entry in childrenToRestart) {
-        final childId = entry.key;
-        final childRef = entry.value;
-        await (context.system as LocalActorSystem).stop(childRef);
-        await supervise(childId, _childFactories[childId]! as Actor Function());
+      if (strategy.restartAll) {
+        // AllForOne: restart all children
+        final childrenToRestart = List.of(_children.entries);
+        for (final entry in childrenToRestart) {
+          final childId = entry.key;
+          await (context.system as LocalActorSystem).stop(entry.value);
+          await supervise(childId, _childFactories[childId]! as Actor Function());
+        }
+      } else {
+        // OneForOne: restart only the failed child
+        final childId = _findChildId(child);
+        if (childId != null) {
+          await (context.system as LocalActorSystem).stop(child);
+          await supervise(childId, _childFactories[childId]! as Actor Function());
+        }
+      }
+    } else if (decision == SupervisionDecision.stop) {
+      await (context.system as LocalActorSystem).stop(child);
+      final childId = _findChildId(child);
+      if (childId != null) {
+        _children.remove(childId);
+        _childFactories.remove(childId);
       }
     }
     return decision;
+  }
+
+  String? _findChildId(ActorRef child) {
+    for (final entry in _children.entries) {
+      if (entry.value.id == child.id) return entry.key;
+    }
+    return null;
   }
 }

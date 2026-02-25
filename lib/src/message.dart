@@ -1,4 +1,4 @@
-import 'actor_ref.dart';
+import 'package:dactor/src/actor_ref.dart';
 
 /// A message that can be sent between actors.
 ///
