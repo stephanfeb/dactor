@@ -18,6 +18,4 @@ export 'src/one_for_one_strategy.dart';
 export 'src/supervisor_actor.dart';
 export 'src/supervision.dart';
 export 'src/system_messages.dart';
-export 'src/test/test_actor_system.dart';
-export 'src/test/test_probe.dart';
 export 'src/timer_scheduler.dart';

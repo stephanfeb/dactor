@@ -13,9 +13,10 @@ dependencies:
   cbor: ^6.3.5
   meta: ^1.16.0
   uuid: ^4.4.0
-  test: ^1.24.0
 
 dev_dependencies:
   lints: ^4.0.0
   test: ^1.24.0
+  dactor_test:
+    path: /Users/stephanfeb/IdeaProjects/agentic/dactor_test
   benchmark_harness: ^2.2.0

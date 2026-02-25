@@ -1,4 +1,5 @@
 import 'package:dactor/dactor.dart';
+import 'package:dactor_test/dactor_test.dart';
 import 'package:test/test.dart';
 
 class EchoActor extends Actor {

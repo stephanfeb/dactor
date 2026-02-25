@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dactor/dactor.dart';
 import 'package:dactor/src/dactor_timer_scheduler.dart';
+import 'package:dactor_test/dactor_test.dart';
 import 'package:test/test.dart';
 
 class TimerTestActor extends Actor {

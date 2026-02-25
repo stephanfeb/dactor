@@ -3,6 +3,7 @@ import 'package:dactor/src/actor.dart';
 import 'package:dactor/src/local_actor_system.dart';
 import 'package:dactor/src/local_message.dart';
 import 'package:dactor/src/routing/pool.dart';
+import 'package:dactor_test/dactor_test.dart';
 import 'package:test/test.dart';
 
 class Worker extends Actor {
