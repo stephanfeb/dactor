@@ -1,6 +1,6 @@
 name: dactor
 description: An actor system for Dart
-version: 1.1.0
+version: 1.2.0
 repository: https://github.com/stephanfeb/dactor
 
 environment:
@@ -17,6 +17,4 @@ dependencies:
 dev_dependencies:
   lints: ^4.0.0
   test: ^1.24.0
-  dactor_test:
-    path: /Users/stephanfeb/IdeaProjects/agentic/dactor_test
   benchmark_harness: ^2.2.0
