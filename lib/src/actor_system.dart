@@ -53,8 +53,18 @@ abstract class ActorSystem {
 
 /// The configuration for an actor system.
 class ActorSystemConfig {
+  /// Where metrics go. Defaults to [NoOpMetricsCollector]; pass an
+  /// [InMemoryMetricsCollector] (bounded) or your own implementation to
+  /// collect them.
   final MetricsCollector? metricsCollector;
+
+  /// Where message traces go. Defaults to [NoOpTraceCollector]; pass an
+  /// [InMemoryTraceCollector] (bounded) or your own implementation to
+  /// collect them. Tracing records every message sent and processed, so
+  /// enable it deliberately.
   final TraceCollector? traceCollector;
+
+  /// Where log records go. Defaults to [ConsoleLogCollector].
   final LogCollector? logCollector;
 
   /// Configuration for ask pattern behavior including timeouts and retries.

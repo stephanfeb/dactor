@@ -1,8 +1,6 @@
 import 'dart:async';
 
 import 'package:dactor/dactor.dart';
-import 'package:dactor/src/metrics/metrics.dart';
-import 'package:dactor/src/routing/pool.dart';
 import 'package:test/test.dart';
 
 /// Records everything that happens to it so tests can inspect lifecycle order.
@@ -93,7 +91,8 @@ void main() {
   setUp(() {
     _Worker.reset();
     _TickingWorker.ticks = 0;
-    system = LocalActorSystem();
+    system = LocalActorSystem(
+        ActorSystemConfig(metricsCollector: InMemoryMetricsCollector()));
   });
 
   tearDown(() => system.shutdown());

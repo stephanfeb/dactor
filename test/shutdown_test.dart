@@ -1,8 +1,6 @@
 import 'dart:async';
 
 import 'package:dactor/dactor.dart';
-// Not exported from the barrel yet (audit item H6).
-import 'package:dactor/src/metrics/metrics.dart';
 import 'package:test/test.dart';
 
 class _TickerActor extends Actor {
@@ -112,7 +110,8 @@ void main() {
     });
 
     test('is idempotent and stop() after shutdown is a no-op', () async {
-      final system = LocalActorSystem();
+      final system = LocalActorSystem(
+          ActorSystemConfig(metricsCollector: InMemoryMetricsCollector()));
       final events = <String>[];
       final ref = await system.spawn('a', () => _TickerActor(events));
 

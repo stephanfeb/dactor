@@ -733,7 +733,7 @@ print('Total subscriptions: ${system.eventBus.subscriptionCount}');
 
 ## 📊 Metrics and Observability
 
-Built-in metrics for monitoring your actor system:
+Built-in metrics for monitoring your actor system. By default a system collects **nothing**: metrics go to a `NoOpMetricsCollector` and traces to a `NoOpTraceCollector`, so an unconfigured system never grows with message volume. Opt in by passing a collector. The bundled `InMemoryMetricsCollector` and `InMemoryTraceCollector` are bounded (10,000 timing samples per metric and 10,000 trace events by default) and are meant for tests and local debugging; implement the `MetricsCollector` or `TraceCollector` interface to ship data elsewhere.
 
 ```dart
 // Create system with metrics
@@ -1098,7 +1098,6 @@ To enable tracing, configure your `TestActorSystem` with an `InMemoryTraceCollec
 
 ```dart
 import 'package:dactor/dactor.dart';
-import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor_test/dactor_test.dart';
 import 'package:test/test.dart';
 
@@ -1147,7 +1146,7 @@ void main() {
 }
 ```
 
-The `InMemoryTraceCollector` stores a list of `TraceEvent` objects for each `correlationId`. Each event records what happened to the message (e.g., `sent`, `processed`, `replied`) and which actor was involved.
+The `InMemoryTraceCollector` stores a list of `TraceEvent` objects for each `correlationId`, keeping at most `maxEvents` (default 10,000) and dropping the oldest correlation ids first. Each event records what happened to the message (e.g., `sent`, `processed`, `replied`) and which actor was involved.
 
 ## 🎯 Best Practices
 

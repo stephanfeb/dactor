@@ -37,7 +37,17 @@ abstract class LogCollector {
   void record(LogRecord record);
 }
 
+/// A collector that discards everything.
+class NoOpLogCollector implements LogCollector {
+  const NoOpLogCollector();
+
+  @override
+  void record(LogRecord record) {}
+}
+
 /// An implementation of [LogCollector] that prints log records to the console.
+/// This is the default for a [LocalActorSystem] created without an explicit
+/// [LogCollector].
 class ConsoleLogCollector implements LogCollector {
   @override
   void record(LogRecord record) {

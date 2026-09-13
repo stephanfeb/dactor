@@ -68,8 +68,8 @@ class LocalActorSystem implements ActorSystem {
   Completer<void> _pumpSignal = Completer<void>();
 
   LocalActorSystem([ActorSystemConfig? config])
-      : metrics = config?.metricsCollector ?? InMemoryMetricsCollector(),
-        tracer = config?.traceCollector ?? InMemoryTraceCollector(),
+      : metrics = config?.metricsCollector ?? const NoOpMetricsCollector(),
+        tracer = config?.traceCollector ?? const NoOpTraceCollector(),
         logger = config?.logCollector ?? ConsoleLogCollector(),
         askConfig = config?.askConfig ?? AskConfig() {
     deadLetterQueue = DeadLetterQueue(metrics,

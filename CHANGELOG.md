@@ -1,5 +1,20 @@
 ## Unreleased
 
+- **A system built without a config no longer collects metrics or traces.**
+  The previous defaults, `InMemoryMetricsCollector` and
+  `InMemoryTraceCollector`, kept a timing sample for every message and a
+  trace event (holding the payload) for every send and receive, forever;
+  measured at roughly 485 MB retained per million messages. The defaults are
+  now `NoOpMetricsCollector` and `NoOpTraceCollector`. Pass an explicit
+  collector to opt in. Also added `NoOpLogCollector`.
+- `InMemoryMetricsCollector` and `InMemoryTraceCollector` are now bounded
+  (`maxTimings` per metric and `maxEvents` overall, both 10,000 by default).
+  The tracer evicts whole correlation ids, oldest first, and exposes
+  `eventCount` and `clear()`; `traces` is now a read-only view.
+- `dactor.dart` now exports the metrics, tracing, logging and routing
+  libraries (`Pool`, `RoutingLogic`, the collectors, `LogRecord`, ...), which
+  already appeared in public signatures but could only be imported from
+  `src/`.
 - **Supervision is routed by an explicit parent record, not by parsing `/` in
   the actor id.** Previously the system took everything before the last `/`
   as the supervisor and cast it with `as SupervisorActor`; an actor named

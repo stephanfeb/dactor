@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:dactor/dactor.dart';
-import 'package:dactor/src/metrics/metrics.dart';
 import 'package:test/test.dart';
 
 class _Plain extends Actor {
@@ -70,7 +69,8 @@ void main() {
   setUp(() {
     _Thrower.log.clear();
     _Counter.starts = 0;
-    system = LocalActorSystem();
+    system = LocalActorSystem(
+        ActorSystemConfig(metricsCollector: InMemoryMetricsCollector()));
   });
 
   tearDown(() => system.shutdown());
