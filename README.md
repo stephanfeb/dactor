@@ -20,7 +20,7 @@ Dactor provides a robust actor system for building concurrent, fault-tolerant, a
 - 🎛️ **Actor Pooling**: Scale with worker pools and round-robin routing
 - 💾 **Memory Efficient**: <1KB overhead per actor
 - 🔍 **Dead Letter Queue**: Handle undeliverable messages gracefully
-- 🚀 **Zero Dependencies**: Pure Dart implementation
+- 🚀 **Pure Dart**: no platform channels or native code; the only runtime dependencies are `uuid` and `meta`
 
 ## 🚀 Quick Start
 

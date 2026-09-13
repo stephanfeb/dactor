@@ -12,6 +12,8 @@
   because actors receive the payload; the counter never incremented and the
   ask timed out. They now switch on the payload and reply via
   `context.sender`.
+- Removed the unused `cbor` dependency and the "zero dependencies" claim.
+- Added a `.pubignore` so `doc/` and repository tooling are not published.
 - **A system built without a config no longer collects metrics or traces.**
   The previous defaults, `InMemoryMetricsCollector` and
   `InMemoryTraceCollector`, kept a timing sample for every message and a

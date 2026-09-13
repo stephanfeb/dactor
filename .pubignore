@@ -1,0 +1,5 @@
+# Design documents and audit reports are for the repository, not the package.
+doc/
+# Repository tooling.
+.github/
+dactor.iml
