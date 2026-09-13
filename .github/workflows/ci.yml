@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Install dependencies
+        run: dart pub get
+      - name: Analyze
+        run: dart analyze
+      # Benchmarks under test/benchmark/ measure RSS and wall-clock time and
+      # are not stable on shared runners, so only the unit tests run here.
+      - name: Test
+        run: dart test test/*_test.dart

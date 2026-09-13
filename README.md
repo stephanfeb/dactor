@@ -938,7 +938,13 @@ Pooled Actor - Throughput: 80000.00 msg/sec
 
 ## 🧪 Testing Your Actors
 
-Dactor includes a dedicated testing toolkit to help you write reliable tests for your actors. The primary tools are `TestActorSystem` and `TestProbe`.
+The testing toolkit lives in the separate [`dactor_test`](https://pub.dev/packages/dactor_test) package so that `package:test` is not a runtime dependency of your application. The primary tools are `TestActorSystem` and `TestProbe`.
+
+Add it as a dev dependency:
+
+```bash
+dart pub add dev:dactor_test
+```
 
 ### TestActorSystem
 
@@ -946,6 +952,7 @@ For testing, you should use `TestActorSystem` instead of `LocalActorSystem`. It 
 
 ```dart
 import 'package:dactor/dactor.dart';
+import 'package:dactor_test/dactor_test.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -1090,7 +1097,10 @@ For more complex scenarios, you can trace the entire flow of a message through t
 To enable tracing, configure your `TestActorSystem` with an `InMemoryTraceCollector`.
 
 ```dart
+import 'package:dactor/dactor.dart';
 import 'package:dactor/src/tracing/tracing.dart';
+import 'package:dactor_test/dactor_test.dart';
+import 'package:test/test.dart';
 
 class HelloActor extends Actor {
   @override
