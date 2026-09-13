@@ -12,8 +12,8 @@ class _TickerActor extends Actor {
   @override
   FutureOr<void> preStart() {
     events.add('preStart');
-    context.timers.startTimerAtFixedRate(
-        'tick', 'tick', const Duration(milliseconds: 5));
+    context.timers
+        .startTimerAtFixedRate('tick', 'tick', const Duration(milliseconds: 5));
   }
 
   @override

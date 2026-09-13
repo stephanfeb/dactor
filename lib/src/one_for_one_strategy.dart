@@ -19,7 +19,8 @@ class OneForOneStrategy implements SupervisionStrategy {
   bool get restartAll => false;
 
   @override
-  SupervisionDecision handle(String actorId, Object error, StackTrace stackTrace) {
+  SupervisionDecision handle(
+      String actorId, Object error, StackTrace stackTrace) {
     final now = DateTime.now();
 
     if (_within != null) {

@@ -72,7 +72,6 @@ void main() {
       await probe.expectMsg('pong');
     });
 
-
     test('should send undeliverable messages to dead letter queue', () async {
       final actor = await system.spawn('test', () => TestActor());
       await system.stop(actor);

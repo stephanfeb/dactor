@@ -46,7 +46,8 @@ void main() {
     test('should expect a message of type with timeout', () async {
       final echo = await system.spawn('echo', () => EchoActor());
       echo.tell(LocalMessage(payload: 'hello'), sender: probe.ref);
-      final msg = await probe.expectMsgType<String>(timeout: Duration(seconds: 1));
+      final msg =
+          await probe.expectMsgType<String>(timeout: Duration(seconds: 1));
       expect(msg, 'hello');
     });
 

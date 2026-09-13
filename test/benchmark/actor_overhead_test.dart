@@ -3,7 +3,6 @@ import 'package:dactor/dactor.dart';
 import 'package:test/test.dart';
 import 'package:dactor/src/local_actor_system.dart';
 
-
 class IdleActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
@@ -51,14 +50,18 @@ void main() {
       final delta = finalMemory - baselineMemory;
       final overheadPerActor = delta / actorCount;
 
-      print('Baseline Memory: ${(baselineMemory / 1024).toStringAsFixed(2)} KB');
+      print(
+          'Baseline Memory: ${(baselineMemory / 1024).toStringAsFixed(2)} KB');
       print('Final Memory: ${(finalMemory / 1024).toStringAsFixed(2)} KB');
-      print('Total Memory Delta for $actorCount actors: ${(delta / 1024).toStringAsFixed(2)} KB');
-      print('Average Overhead per Actor: ${(overheadPerActor / 1024).toStringAsFixed(2)} KB');
+      print(
+          'Total Memory Delta for $actorCount actors: ${(delta / 1024).toStringAsFixed(2)} KB');
+      print(
+          'Average Overhead per Actor: ${(overheadPerActor / 1024).toStringAsFixed(2)} KB');
 
       // The goal is <1KB per actor. This assertion checks if we are within a reasonable range.
       // We set a slightly higher threshold to account for measurement noise.
-      expect(overheadPerActor, lessThan(1500), reason: 'Memory overhead per actor should be less than 1.5 KB');
+      expect(overheadPerActor, lessThan(1500),
+          reason: 'Memory overhead per actor should be less than 1.5 KB');
     }, timeout: const Timeout(Duration(minutes: 1)));
   });
 }

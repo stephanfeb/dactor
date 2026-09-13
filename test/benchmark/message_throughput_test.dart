@@ -42,7 +42,8 @@ void main() {
         actor.tell(LocalMessage(payload: i));
       }
 
-      final count = await actor.ask(LocalMessage(payload: 'get_count'), const Duration(seconds: 5));
+      final count = await actor.ask(
+          LocalMessage(payload: 'get_count'), const Duration(seconds: 5));
       expect(count, messageCount);
 
       stopwatch.stop();
@@ -50,12 +51,14 @@ void main() {
       final throughput = messageCount / (elapsed / 1000);
 
       print('Single Actor - Processed $messageCount messages in ${elapsed}ms');
-      print('Single Actor - Throughput: ${throughput.toStringAsFixed(2)} msg/sec');
+      print(
+          'Single Actor - Throughput: ${throughput.toStringAsFixed(2)} msg/sec');
     });
 
     test('measures message throughput for a pooled actor', () async {
       final pool = Pool(workerCount: 4);
-      final pooledActor = await system.spawn('pooled-benchmark', () => BenchmarkActor(), pool: pool);
+      final pooledActor = await system
+          .spawn('pooled-benchmark', () => BenchmarkActor(), pool: pool);
       const messageCount = 100000;
       final stopwatch = Stopwatch()..start();
 
@@ -71,7 +74,8 @@ void main() {
       final throughput = messageCount / (elapsed / 1000);
 
       print('Pooled Actor - Processed $messageCount messages in ${elapsed}ms');
-      print('Pooled Actor - Throughput: ${throughput.toStringAsFixed(2)} msg/sec');
+      print(
+          'Pooled Actor - Throughput: ${throughput.toStringAsFixed(2)} msg/sec');
     });
   });
 }

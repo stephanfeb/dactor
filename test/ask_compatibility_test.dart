@@ -6,7 +6,7 @@ import 'package:dactor/dactor.dart';
 /// Test message that implements Message but not LocalMessage
 class SimpleMessage implements Message {
   final String data;
-  
+
   @override
   final String correlationId;
   @override
@@ -26,23 +26,23 @@ class SimpleMessage implements Message {
 /// Test response using AskableResponse helper
 class SimpleResponse extends AskableResponse {
   final String result;
-  
+
   SimpleResponse(this.result);
 }
 
 /// Test command using AskableMessage helper
 class TestCommand extends AskableMessage {
   final String command;
-  
+
   TestCommand(this.command);
 }
 
 /// Test response using manual LocalMessage extension
 class ManualResponse extends LocalMessage {
   final int value;
-  
+
   ManualResponse(this.value) : super(payload: null);
-  
+
   @override
   dynamic get payload => this;
 }
@@ -85,7 +85,8 @@ void main() {
 
     setUp(() async {
       system = TestActorSystem();
-      testActor = await system.spawn('compatibility_test', () => CompatibilityTestActor());
+      testActor = await system.spawn(
+          'compatibility_test', () => CompatibilityTestActor());
     });
 
     tearDown(() async {
@@ -94,26 +95,29 @@ void main() {
 
     test('should handle regular Message (not LocalMessage) in ask', () async {
       final message = SimpleMessage('test_data');
-      
-      final response = await testActor.ask<SimpleResponse>(message, Duration(seconds: 1));
-      
+
+      final response =
+          await testActor.ask<SimpleResponse>(message, Duration(seconds: 1));
+
       expect(response, isA<SimpleResponse>());
       expect(response.result, 'processed_test_data');
     });
 
     test('should handle AskableMessage in ask', () async {
       final command = TestCommand('execute');
-      
-      final response = await testActor.ask<SimpleResponse>(command, Duration(seconds: 1));
-      
+
+      final response =
+          await testActor.ask<SimpleResponse>(command, Duration(seconds: 1));
+
       expect(response, isA<SimpleResponse>());
       expect(response.result, 'command_execute');
     });
 
     test('should handle manual LocalMessage response', () async {
       final message = LocalMessage(payload: 'get_number');
-      final response = await testActor.ask<ManualResponse>(message, Duration(seconds: 1));
-      
+      final response =
+          await testActor.ask<ManualResponse>(message, Duration(seconds: 1));
+
       expect(response, isA<ManualResponse>());
       expect(response.value, 42);
     });
@@ -122,20 +126,20 @@ void main() {
       final message = LocalMessage(payload: 'error_test');
       expect(
         () => testActor.ask<SimpleResponse>(message, Duration(seconds: 1)),
-        throwsA(predicate((e) => 
-          e is StateError && 
-          e.message.contains('Ask response type mismatch') &&
-          e.message.contains('Expected: SimpleResponse') &&
-          e.message.contains('but received: String')
-        )),
+        throwsA(predicate((e) =>
+            e is StateError &&
+            e.message.contains('Ask response type mismatch') &&
+            e.message.contains('Expected: SimpleResponse') &&
+            e.message.contains('but received: String'))),
       );
     });
 
     test('should work with LocalMessage directly', () async {
       final localMessage = LocalMessage(payload: 'direct_test');
-      
-      final response = await testActor.ask<SimpleResponse>(localMessage, Duration(seconds: 1));
-      
+
+      final response = await testActor.ask<SimpleResponse>(
+          localMessage, Duration(seconds: 1));
+
       expect(response, isA<SimpleResponse>());
       expect(response.result, 'processed_direct_test');
     });
@@ -146,11 +150,12 @@ void main() {
         payload: 'correlation_test',
         correlationId: originalId,
       );
-      
+
       // We can't directly test the correlation ID preservation in the response,
       // but we can verify the ask operation works correctly
-      final response = await testActor.ask<SimpleResponse>(localMessage, Duration(seconds: 1));
-      
+      final response = await testActor.ask<SimpleResponse>(
+          localMessage, Duration(seconds: 1));
+
       expect(response, isA<SimpleResponse>());
       expect(response.result, 'processed_correlation_test');
     });
@@ -160,9 +165,9 @@ void main() {
         final message = SimpleMessage('concurrent_$index');
         return testActor.ask<SimpleResponse>(message, Duration(seconds: 1));
       });
-      
+
       final responses = await Future.wait(futures);
-      
+
       expect(responses.length, 10);
       for (int i = 0; i < responses.length; i++) {
         expect(responses[i].result, 'processed_concurrent_$i');
@@ -171,7 +176,7 @@ void main() {
 
     test('AskableMessage should be instance of LocalMessage', () {
       final command = TestCommand('test');
-      
+
       expect(command, isA<LocalMessage>());
       expect(command, isA<Message>());
       expect(command.payload, equals(command));
@@ -179,7 +184,7 @@ void main() {
 
     test('AskableResponse should be instance of LocalMessage', () {
       final response = SimpleResponse('test');
-      
+
       expect(response, isA<LocalMessage>());
       expect(response, isA<Message>());
       expect(response.payload, equals(response));

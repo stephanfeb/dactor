@@ -22,7 +22,8 @@ class LogRecord {
   /// The actor that created the log entry.
   final ActorRef? actor;
 
-  LogRecord(this.level, this.message, {this.actor}) : timestamp = DateTime.now();
+  LogRecord(this.level, this.message, {this.actor})
+      : timestamp = DateTime.now();
 
   @override
   String toString() {

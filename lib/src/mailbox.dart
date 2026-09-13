@@ -5,12 +5,16 @@ import 'package:dactor/src/message.dart';
 class Mailbox {
   final String actorId;
   final void Function(Mailbox mailbox) _onSchedule;
-  final void Function(String name, double value, {Map<String, String>? tags})? _onGauge;
+  final void Function(String name, double value, {Map<String, String>? tags})?
+      _onGauge;
   final _queue = Queue<Message>();
   bool _isDisposed = false;
 
-  Mailbox(this.actorId, this._onSchedule, {
-    void Function(String name, double value, {Map<String, String>? tags})? onGauge,
+  Mailbox(
+    this.actorId,
+    this._onSchedule, {
+    void Function(String name, double value, {Map<String, String>? tags})?
+        onGauge,
   }) : _onGauge = onGauge;
 
   void enqueue(Message message) {

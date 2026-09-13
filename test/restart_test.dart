@@ -78,8 +78,7 @@ class _Event {}
 class _Sup extends SupervisorActor {
   _Sup([SupervisionStrategy? strategy])
       : super(strategy ??
-            OneForOneStrategy(
-                decider: (e, s) => SupervisionDecision.restart));
+            OneForOneStrategy(decider: (e, s) => SupervisionDecision.restart));
 }
 
 Future<void> _settle([int ms = 60]) =>
@@ -101,8 +100,7 @@ void main() {
       {SupervisionStrategy? strategy,
       Actor Function()? factory,
       String name = 'child'}) async {
-    final spawned =
-        await system.spawnAndGetActor('sup', () => _Sup(strategy));
+    final spawned = await system.spawnAndGetActor('sup', () => _Sup(strategy));
     final sup = spawned.actor as _Sup;
     final child = await sup.supervise(name, factory ?? () => _Worker());
     return (child: child, sup: sup);
@@ -237,9 +235,10 @@ void main() {
 
   group('AllForOne', () {
     test('restarts every child in place', () async {
-      final strategy = AllForOneStrategy(
-          decider: (e, s) => SupervisionDecision.restart);
-      final spawned = await system.spawnAndGetActor('sup', () => _Sup(strategy));
+      final strategy =
+          AllForOneStrategy(decider: (e, s) => SupervisionDecision.restart);
+      final spawned =
+          await system.spawnAndGetActor('sup', () => _Sup(strategy));
       final sup = spawned.actor as _Sup;
       final c1 = await sup.supervise('c1', () => _Worker());
       final c2 = await sup.supervise('c2', () => _Worker());

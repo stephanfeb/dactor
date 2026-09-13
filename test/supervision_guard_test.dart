@@ -64,7 +64,8 @@ Future<void> _settle([int ms = 60]) =>
 
 void main() {
   late LocalActorSystem system;
-  InMemoryMetricsCollector metrics() => system.metrics as InMemoryMetricsCollector;
+  InMemoryMetricsCollector metrics() =>
+      system.metrics as InMemoryMetricsCollector;
 
   setUp(() {
     _Thrower.log.clear();
@@ -76,7 +77,8 @@ void main() {
   tearDown(() => system.shutdown());
 
   group('failure routing ignores the name', () {
-    test('a slash-named actor under a non-supervisor does not crash the process',
+    test(
+        'a slash-named actor under a non-supervisor does not crash the process',
         () async {
       await system.spawn('plain', () => _Plain());
       final evil = await system.spawn('plain/evil', () => _Thrower());
@@ -191,8 +193,7 @@ void main() {
   });
 
   group('supervision errors are contained', () {
-    test('a throwing onChildFailure stops the child and is recorded',
-        () async {
+    test('a throwing onChildFailure stops the child and is recorded', () async {
       final spawned =
           await system.spawnAndGetActor('bad', () => _ThrowingSupervisor());
       final child = await (spawned.actor as _ThrowingSupervisor)
@@ -210,7 +211,8 @@ void main() {
 
 class _ThrowingSupervisor extends SupervisorActor {
   _ThrowingSupervisor()
-      : super(OneForOneStrategy(decider: (e, s) => SupervisionDecision.restart));
+      : super(
+            OneForOneStrategy(decider: (e, s) => SupervisionDecision.restart));
 
   @override
   Future<SupervisionDecision> onChildFailure(

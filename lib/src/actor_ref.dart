@@ -22,11 +22,11 @@ abstract class ActorRef {
   ///
   /// This is a request-response operation. The message is sent asynchronously
   /// and the future completes with the response from the actor.
-  /// 
+  ///
   /// **Important**: For ask operations, response messages should extend [LocalMessage]
   /// and override the `payload` getter to return `this` (the response object itself).
   /// This ensures proper type casting and response handling.
-  /// 
+  ///
   /// Example:
   /// ```dart
   /// class MyResponse extends LocalMessage {
@@ -36,10 +36,10 @@ abstract class ActorRef {
   ///   dynamic get payload => this;
   /// }
   /// ```
-  /// 
+  ///
   /// The request message can be either a [Message] or [LocalMessage]. If a regular
   /// [Message] is provided, it will be automatically wrapped in a [LocalMessage].
-  /// 
+  ///
   /// If [timeout] is null, the default timeout from the actor system configuration is used.
   Future<T> ask<T>(Message message, [Duration? timeout]);
 

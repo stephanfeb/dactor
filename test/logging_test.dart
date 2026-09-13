@@ -36,8 +36,7 @@ class _TestLogCollector implements LogCollector {
 class _TestActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
-    context.system.logger
-        .record(LogRecord(LogLevel.info, message.toString()));
+    context.system.logger.record(LogRecord(LogLevel.info, message.toString()));
   }
 }
 
@@ -48,8 +47,8 @@ void main() {
 
     setUp(() {
       logCollector = _TestLogCollector();
-      system = ActorSystem.create(
-          ActorSystemConfig(logCollector: logCollector));
+      system =
+          ActorSystem.create(ActorSystemConfig(logCollector: logCollector));
     });
 
     tearDown(() async {

@@ -153,7 +153,8 @@ void main() {
     test('should publish and deliver events to subscribers', () async {
       // Arrange
       final orderActor = await system.spawn('order-actor', () => OrderActor());
-      final paymentActor = await system.spawn('payment-actor', () => PaymentActor());
+      final paymentActor =
+          await system.spawn('payment-actor', () => PaymentActor());
       final publisher = await system.spawn('publisher', () => PublisherActor());
 
       // Wait for actors to start and subscribe
@@ -170,7 +171,7 @@ void main() {
       final orderActorInstance = (system as LocalActorSystem)
           .spawnAndGetActor('order-actor-temp', () => OrderActor())
           .then((result) => result.actor);
-      
+
       // Verify event bus has subscribers
       expect(system.eventBus.subscriberCount, greaterThan(0));
       expect(system.eventBus.subscriptionCount, greaterThan(0));
@@ -178,7 +179,8 @@ void main() {
 
     test('should handle subscription and unsubscription', () async {
       // Arrange
-      final actor = await system.spawn('test-actor', () => UnsubscribingActor());
+      final actor =
+          await system.spawn('test-actor', () => UnsubscribingActor());
       final publisher = await system.spawn('publisher', () => PublisherActor());
 
       // Wait for actor to start and subscribe
@@ -198,7 +200,7 @@ void main() {
     test('should clean up subscriptions when actor is stopped', () async {
       // Arrange
       final actor = await system.spawn('temp-actor', () => OrderActor());
-      
+
       // Wait for actor to start and subscribe
       await Future.delayed(Duration(milliseconds: 100));
 
@@ -256,7 +258,8 @@ void main() {
         final actor = await system.spawn('monitor-actor', () => OrderActor());
         await Future.delayed(Duration(milliseconds: 100));
 
-        final publisher = await system.spawn('publisher', () => PublisherActor());
+        final publisher =
+            await system.spawn('publisher', () => PublisherActor());
         publisher.tell(LocalMessage(payload: 'publish_order'));
         await Future.delayed(Duration(milliseconds: 100));
 
@@ -265,13 +268,15 @@ void main() {
 
         // Assert
         expect(events.length, greaterThan(0));
-        
+
         // Should have subscription events
-        final subscriptionEvents = events.where((e) => e.toString().contains('Subscribed')).toList();
+        final subscriptionEvents =
+            events.where((e) => e.toString().contains('Subscribed')).toList();
         expect(subscriptionEvents.length, greaterThan(0));
 
         // Should have cleanup events
-        final cleanupEvents = events.where((e) => e.toString().contains('Cleanup')).toList();
+        final cleanupEvents =
+            events.where((e) => e.toString().contains('Cleanup')).toList();
         expect(cleanupEvents.length, greaterThan(0));
       } finally {
         await subscription.cancel();
@@ -298,7 +303,8 @@ void main() {
 
       // Act & Assert - check initial state
       expect(system.eventBus.subscriberCount, equals(1));
-      expect(system.eventBus.subscriptionCount, equals(2)); // OrderCreated + OrderShipped
+      expect(system.eventBus.subscriptionCount,
+          equals(2)); // OrderCreated + OrderShipped
 
       // Get subscription details
       final subscriptions = system.eventBus.subscriptions;
@@ -322,7 +328,8 @@ void main() {
 
     test('should handle rapid subscribe/unsubscribe cycles', () async {
       // Arrange
-      final actor = await system.spawn('rapid-actor', () => UnsubscribingActor());
+      final actor =
+          await system.spawn('rapid-actor', () => UnsubscribingActor());
       await Future.delayed(Duration(milliseconds: 50));
 
       // Verify initial state - UnsubscribingActor subscribes to OrderCreated in preStart
@@ -335,7 +342,8 @@ void main() {
       }
 
       // Assert - should still have the original preStart subscription to OrderCreated
-      expect(system.eventBus.subscriptionCount, equals(1)); // Only the preStart subscription
+      expect(system.eventBus.subscriptionCount,
+          equals(1)); // Only the preStart subscription
     });
 
     test('should handle cleanup of non-existent actor gracefully', () async {
@@ -359,7 +367,8 @@ void main() {
       system.eventBus.unsubscribe<PaymentProcessed>(actor);
 
       // Assert - should not affect existing subscriptions
-      expect(system.eventBus.subscriptionCount, equals(2)); // OrderCreated + OrderShipped
+      expect(system.eventBus.subscriptionCount,
+          equals(2)); // OrderCreated + OrderShipped
     });
   });
 }

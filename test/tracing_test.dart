@@ -19,8 +19,7 @@ void main() {
 
     setUp(() {
       collector = InMemoryTraceCollector();
-      system =
-          TestActorSystem(ActorSystemConfig(traceCollector: collector));
+      system = TestActorSystem(ActorSystemConfig(traceCollector: collector));
     });
 
     tearDown(() async {

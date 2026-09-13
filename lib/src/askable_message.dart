@@ -10,13 +10,13 @@ import 'package:dactor/src/local_message.dart';
 /// ```dart
 /// class MyCommand extends AskableMessage {
 ///   final String data;
-///   
+///
 ///   MyCommand(this.data);
 /// }
-/// 
+///
 /// class MyResponse extends AskableResponse {
 ///   final String result;
-///   
+///
 ///   MyResponse(this.result);
 /// }
 /// ```
@@ -28,13 +28,13 @@ abstract class AskableMessage extends LocalMessage {
     DateTime? timestamp,
     Map<String, dynamic>? metadata,
   }) : super(
-    payload: null, // Will be overridden by getter
-    sender: sender,
-    correlationId: correlationId,
-    replyTo: replyTo,
-    timestamp: timestamp,
-    metadata: metadata,
-  );
+          payload: null, // Will be overridden by getter
+          sender: sender,
+          correlationId: correlationId,
+          replyTo: replyTo,
+          timestamp: timestamp,
+          metadata: metadata,
+        );
 
   @override
   dynamic get payload => this; // Return the message itself
@@ -50,7 +50,7 @@ abstract class AskableMessage extends LocalMessage {
 /// class ProcessingResult extends AskableResponse {
 ///   final bool success;
 ///   final String message;
-///   
+///
 ///   ProcessingResult({required this.success, required this.message});
 /// }
 /// ```
@@ -62,13 +62,13 @@ abstract class AskableResponse extends LocalMessage {
     DateTime? timestamp,
     Map<String, dynamic>? metadata,
   }) : super(
-    payload: null, // Will be overridden by getter
-    sender: sender,
-    correlationId: correlationId,
-    replyTo: replyTo,
-    timestamp: timestamp,
-    metadata: metadata,
-  );
+          payload: null, // Will be overridden by getter
+          sender: sender,
+          correlationId: correlationId,
+          replyTo: replyTo,
+          timestamp: timestamp,
+          metadata: metadata,
+        );
 
   @override
   dynamic get payload => this; // Return the response itself

@@ -45,8 +45,8 @@ void main() {
     test('explicit collectors are still honoured', () async {
       final metrics = InMemoryMetricsCollector();
       final tracer = InMemoryTraceCollector();
-      final system = LocalActorSystem(ActorSystemConfig(
-          metricsCollector: metrics, traceCollector: tracer));
+      final system = LocalActorSystem(
+          ActorSystemConfig(metricsCollector: metrics, traceCollector: tracer));
       final ref = await system.spawn('echo', () => _Echo());
       final reply = await ref.ask<dynamic>(LocalMessage(payload: 'hi'));
       expect(reply, 'hi');

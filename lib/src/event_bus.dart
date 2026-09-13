@@ -41,7 +41,7 @@ class EventSubscription {
   final Type eventType;
   final DateTime createdAt;
 
-  EventSubscription(this.subscriber, this.eventType) 
+  EventSubscription(this.subscriber, this.eventType)
       : createdAt = DateTime.now();
 
   @override
@@ -60,27 +60,30 @@ class EventSubscription {
 }
 
 /// The event bus manages event subscriptions and routing.
-/// 
+///
 /// This implementation provides type-safe event publishing and subscription
 /// following the actor model principles. Events are delivered asynchronously
 /// to all registered subscribers.
 class EventBus {
   final Map<Type, Set<ActorRef>> _subscriptions = {};
   final Map<ActorRef, Set<Type>> _subscriberTypes = {};
-  final StreamController<EventBusEvent> _eventController = StreamController.broadcast();
+  final StreamController<EventBusEvent> _eventController =
+      StreamController.broadcast();
 
   /// Stream of event bus events for monitoring and debugging.
   Stream<EventBusEvent> get events => _eventController.stream;
 
   /// Subscribe an actor to events of a specific type.
-  /// 
+  ///
   /// The subscriber will receive all events of type [T] and its subtypes.
   /// Multiple subscriptions to the same type by the same actor are idempotent.
   void subscribe<T>(ActorRef subscriber) {
     final eventType = T;
-    final wasAdded = _subscriptions.putIfAbsent(eventType, () => <ActorRef>{}).add(subscriber);
+    final wasAdded = _subscriptions
+        .putIfAbsent(eventType, () => <ActorRef>{})
+        .add(subscriber);
     _subscriberTypes.putIfAbsent(subscriber, () => <Type>{}).add(eventType);
-    
+
     // Only emit event if this was a new subscription
     if (wasAdded) {
       _eventController.add(EventBusEvent.subscribed(subscriber, eventType));
@@ -94,12 +97,12 @@ class EventBus {
     if (_subscriptions[eventType]?.isEmpty == true) {
       _subscriptions.remove(eventType);
     }
-    
+
     _subscriberTypes[subscriber]?.remove(eventType);
     if (_subscriberTypes[subscriber]?.isEmpty == true) {
       _subscriberTypes.remove(subscriber);
     }
-    
+
     // Only emit event if something was actually removed
     if (wasRemoved) {
       _eventController.add(EventBusEvent.unsubscribed(subscriber, eventType));
@@ -107,13 +110,13 @@ class EventBus {
   }
 
   /// Publish an event to all subscribers.
-  /// 
+  ///
   /// The event will be delivered to all actors subscribed to type [T]
   /// and any of its supertypes.
   void publish<T>(T event) {
     final eventType = T;
     final subscribers = _getSubscribersForType(eventType);
-    
+
     for (final subscriber in subscribers) {
       try {
         subscriber.tell(LocalMessage(payload: event));
@@ -122,8 +125,9 @@ class EventBus {
         // This is handled by the actor system's dead letter queue
       }
     }
-    
-    _eventController.add(EventBusEvent.published(eventType, event, subscribers.length));
+
+    _eventController
+        .add(EventBusEvent.published(eventType, event, subscribers.length));
   }
 
   /// Get all subscribers for a given event type.
@@ -144,13 +148,15 @@ class EventBus {
         }
       }
       _subscriberTypes.remove(actor);
-      
-      _eventController.add(EventBusEvent.cleanup(actor, subscribedTypes.length));
+
+      _eventController
+          .add(EventBusEvent.cleanup(actor, subscribedTypes.length));
     }
   }
 
   /// Get all current subscriptions for debugging/monitoring.
-  Map<Type, Set<ActorRef>> get subscriptions => Map.unmodifiable(_subscriptions);
+  Map<Type, Set<ActorRef>> get subscriptions =>
+      Map.unmodifiable(_subscriptions);
 
   /// Get the number of active subscriptions.
   int get subscriptionCount => _subscriptions.values
@@ -171,7 +177,7 @@ class EventBus {
 /// Events emitted by the event bus for monitoring and debugging.
 abstract class EventBusEvent {
   final DateTime timestamp;
-  
+
   EventBusEvent() : timestamp = DateTime.now();
 
   factory EventBusEvent.subscribed(ActorRef subscriber, Type eventType) =>
@@ -180,7 +186,8 @@ abstract class EventBusEvent {
   factory EventBusEvent.unsubscribed(ActorRef subscriber, Type eventType) =>
       _UnsubscribedEvent(subscriber, eventType);
 
-  factory EventBusEvent.published(Type eventType, dynamic event, int subscriberCount) =>
+  factory EventBusEvent.published(
+          Type eventType, dynamic event, int subscriberCount) =>
       _PublishedEvent(eventType, event, subscriberCount);
 
   factory EventBusEvent.cleanup(ActorRef actor, int subscriptionCount) =>
@@ -215,7 +222,8 @@ class _PublishedEvent extends EventBusEvent {
   _PublishedEvent(this.eventType, this.event, this.subscriberCount);
 
   @override
-  String toString() => 'PublishedEvent($eventType, $event, $subscriberCount subscribers)';
+  String toString() =>
+      'PublishedEvent($eventType, $event, $subscriberCount subscribers)';
 }
 
 class _CleanupEvent extends EventBusEvent {

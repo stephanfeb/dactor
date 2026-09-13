@@ -12,7 +12,8 @@ abstract class SupervisionStrategy {
   bool get restartAll => false;
 
   /// Decides what to do when a child actor fails.
-  SupervisionDecision handle(String actorId, Object error, StackTrace stackTrace);
+  SupervisionDecision handle(
+      String actorId, Object error, StackTrace stackTrace);
 }
 
 /// A supervisor is an actor that supervises other actors.

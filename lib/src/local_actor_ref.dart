@@ -19,7 +19,8 @@ class LocalActorRef implements ActorRef {
   final _watchers = <ActorRef>[];
   bool _isAlive = true;
 
-  LocalActorRef(this.id, this._mailbox, this._deadLetterQueue, this._tracer, this._askConfig);
+  LocalActorRef(this.id, this._mailbox, this._deadLetterQueue, this._tracer,
+      this._askConfig);
 
   @override
   bool get isAlive => _isAlive;
@@ -47,7 +48,8 @@ class LocalActorRef implements ActorRef {
           localMessage.correlationId, 'sent', this, localMessage.payload));
       _mailbox.enqueue(localMessage);
     } else {
-      final lMessage = message is LocalMessage ? message : LocalMessage(payload: message);
+      final lMessage =
+          message is LocalMessage ? message : LocalMessage(payload: message);
       _deadLetterQueue.enqueue(
           DeadLetter(message, sender ?? lMessage.sender ?? this, this));
     }
@@ -59,7 +61,8 @@ class LocalActorRef implements ActorRef {
   }
 
   /// Enhanced ask method with configurable retry logic and better error handling.
-  Future<T> askWithRetry<T>(Message message, {
+  Future<T> askWithRetry<T>(
+    Message message, {
     Duration? timeout,
     int? maxRetries,
     bool? enableRetries,
@@ -137,8 +140,8 @@ class LocalActorRef implements ActorRef {
   }
 
   /// Performs a single ask attempt without retry logic.
-  Future<T> _performAsk<T>(Message message, Duration timeout, int attemptNumber) {
-
+  Future<T> _performAsk<T>(
+      Message message, Duration timeout, int attemptNumber) {
     if (!_isAlive) {
       throw StateError('Actor ${id} is not alive');
     }
@@ -210,7 +213,6 @@ class _TemporaryActorRef<T> implements ActorRef {
 
   @override
   void tell(Message message, {ActorRef? sender}) {
-
     if (isAlive) {
       try {
         final localMessage = message as LocalMessage;
@@ -220,18 +222,16 @@ class _TemporaryActorRef<T> implements ActorRef {
           _completer.complete(payload);
         } else {
           _completer.completeError(
-            StateError('Ask response type mismatch. Expected: $T, '
-                      'but received: ${payload.runtimeType}. '
-                      'Response messages should extend LocalMessage and override '
-                      'the payload getter to return the response object itself.')
-          );
+              StateError('Ask response type mismatch. Expected: $T, '
+                  'but received: ${payload.runtimeType}. '
+                  'Response messages should extend LocalMessage and override '
+                  'the payload getter to return the response object itself.'));
         }
       } catch (e) {
-        _completer.completeError(
-          StateError('Ask response must be a LocalMessage. '
-                    'Received: ${message.runtimeType}. '
-                    'Exception: $e')
-        );
+        _completer
+            .completeError(StateError('Ask response must be a LocalMessage. '
+                'Received: ${message.runtimeType}. '
+                'Exception: $e'));
       }
     }
   }

@@ -30,8 +30,7 @@ abstract class ActorContext {
   /// The new actor is *not* supervised by this one, whatever its [id] looks
   /// like. To create a supervised child, extend [SupervisorActor] and call
   /// `supervise`.
-  Future<ActorRef> spawn<T extends Actor>(
-      String id, T Function() actorFactory);
+  Future<ActorRef> spawn<T extends Actor>(String id, T Function() actorFactory);
 
   /// Watches an actor for termination.
   void watch(ActorRef actor);

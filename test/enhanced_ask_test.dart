@@ -14,13 +14,13 @@ class TimeoutActor extends Actor {
       context.sender?.tell(LocalMessage(payload: 'timeout_config_set'));
       return;
     }
-    
+
     if (message is String && message == 'ping') {
       // Simulate timeout by not responding
       if (_shouldTimeout) {
         return; // Don't send a response
       }
-      
+
       // Success case
       context.sender?.tell(LocalMessage(payload: 'pong'));
     }
@@ -60,15 +60,18 @@ void main() {
         ),
       );
       final testSystem = TestActorSystem(config);
-      final testActor = await testSystem.spawn('timeout_test', () => TimeoutActor());
-      
+      final testActor =
+          await testSystem.spawn('timeout_test', () => TimeoutActor());
+
       // Configure actor to timeout (not respond)
-      await testActor.ask(LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
-      
+      await testActor.ask(
+          LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
+
       final stopwatch = Stopwatch()..start();
-      
+
       try {
-        await testActor.ask(LocalMessage(payload: 'ping')); // Use default timeout
+        await testActor
+            .ask(LocalMessage(payload: 'ping')); // Use default timeout
         fail('Should have timed out');
       } catch (e) {
         expect(e, isA<TimeoutException>());
@@ -77,7 +80,7 @@ void main() {
         expect(stopwatch.elapsedMilliseconds, greaterThan(80));
         expect(stopwatch.elapsedMilliseconds, lessThan(300));
       }
-      
+
       await testSystem.shutdown();
     });
 
@@ -92,26 +95,28 @@ void main() {
         ),
       );
       final testSystem = TestActorSystem(config);
-      final testActor = await testSystem.spawn('retry_test', () => TimeoutActor());
-      
+      final testActor =
+          await testSystem.spawn('retry_test', () => TimeoutActor());
+
       // Configure actor to timeout
-      await testActor.ask(LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
-      
+      await testActor.ask(
+          LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
+
       final stopwatch = Stopwatch()..start();
-      
+
       try {
         await testActor.ask(LocalMessage(payload: 'ping'));
         fail('Should have timed out after retries');
       } catch (e) {
         expect(e, isA<TimeoutException>());
         stopwatch.stop();
-        
+
         // Should take approximately: 50ms (initial) + 10ms (backoff) + 50ms (retry1) + 20ms (backoff) + 50ms (retry2)
         // = ~180ms total, but allow for some variation
         expect(stopwatch.elapsedMilliseconds, greaterThan(140));
         expect(stopwatch.elapsedMilliseconds, lessThan(600));
       }
-      
+
       await testSystem.shutdown();
     });
 
@@ -120,11 +125,12 @@ void main() {
         askConfig: AskConfig(defaultTimeout: Duration(seconds: 1)),
       );
       final testSystem = TestActorSystem(config);
-      final testActor = await testSystem.spawn('success_test', () => EchoActor());
-      
+      final testActor =
+          await testSystem.spawn('success_test', () => EchoActor());
+
       final result = await testActor.ask(LocalMessage(payload: 'hello'));
       expect(result, 'echo: hello');
-      
+
       await testSystem.shutdown();
     });
 
@@ -133,24 +139,27 @@ void main() {
         askConfig: AskConfig.noRetries(),
       );
       final testSystem = TestActorSystem(config);
-      final testActor = await testSystem.spawn('no_retry_test', () => TimeoutActor());
-      
+      final testActor =
+          await testSystem.spawn('no_retry_test', () => TimeoutActor());
+
       // Configure actor to timeout
-      await testActor.ask(LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
-      
+      await testActor.ask(
+          LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
+
       final stopwatch = Stopwatch()..start();
-      
+
       try {
-        await testActor.ask(LocalMessage(payload: 'ping'), Duration(milliseconds: 100));
+        await testActor.ask(
+            LocalMessage(payload: 'ping'), Duration(milliseconds: 100));
         fail('Should have timed out');
       } catch (e) {
         expect(e, isA<TimeoutException>());
         stopwatch.stop();
-        
+
         // Should fail quickly without retries (around 100ms)
         expect(stopwatch.elapsedMilliseconds, lessThan(200));
       }
-      
+
       await testSystem.shutdown();
     });
 
@@ -165,14 +174,14 @@ void main() {
       expect(config.calculateBackoff(2), Duration(milliseconds: 200));
       expect(config.calculateBackoff(3), Duration(milliseconds: 400));
       expect(config.calculateBackoff(4), Duration(milliseconds: 800));
-      
+
       // Should cap at maxBackoffDuration
       expect(config.calculateBackoff(10), Duration(seconds: 5));
     });
 
     test('should use development configuration correctly', () {
       final config = AskConfig.development();
-      
+
       expect(config.defaultTimeout, Duration(seconds: 30));
       expect(config.maxRetries, 5);
       expect(config.enableRetries, true);
@@ -180,7 +189,7 @@ void main() {
 
     test('should use production configuration correctly', () {
       final config = AskConfig.production();
-      
+
       expect(config.defaultTimeout, Duration(seconds: 3));
       expect(config.maxRetries, 2);
       expect(config.enableRetries, true);
@@ -191,21 +200,23 @@ void main() {
         askConfig: AskConfig(maxRetries: 1),
       );
       final testSystem = TestActorSystem(config);
-      final testActor = await testSystem.spawn('override_test', () => EchoActor());
-      
+      final testActor =
+          await testSystem.spawn('override_test', () => EchoActor());
+
       // Test that we can override timeout
       final localRef = testActor as LocalActorRef;
       final result = await localRef.askWithRetry(
         LocalMessage(payload: 'test'),
         timeout: Duration(seconds: 2),
       );
-      
+
       expect(result, 'echo: test');
-      
+
       await testSystem.shutdown();
     });
 
-    test('should provide detailed error messages with attempt information', () async {
+    test('should provide detailed error messages with attempt information',
+        () async {
       final config = ActorSystemConfig(
         askConfig: AskConfig(
           defaultTimeout: Duration(milliseconds: 50),
@@ -213,11 +224,13 @@ void main() {
         ),
       );
       final testSystem = TestActorSystem(config);
-      final testActor = await testSystem.spawn('error_message_test', () => TimeoutActor());
-      
+      final testActor =
+          await testSystem.spawn('error_message_test', () => TimeoutActor());
+
       // Configure actor to timeout
-      await testActor.ask(LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
-      
+      await testActor.ask(
+          LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
+
       try {
         await testActor.ask(LocalMessage(payload: 'ping'));
         fail('Should have timed out');
@@ -225,10 +238,11 @@ void main() {
         expect(e, isA<TimeoutException>());
         expect(e.toString(), contains('timed out after 50ms'));
         expect(e.toString(), contains('attempt 1'));
-        expect(e.toString(), contains('error_message_test')); // Actor ID should be in error
+        expect(e.toString(),
+            contains('error_message_test')); // Actor ID should be in error
       }
-      
+
       await testSystem.shutdown();
     });
   });
-} 
+}

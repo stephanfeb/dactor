@@ -55,7 +55,7 @@ class HeartbeatActor extends Actor {
     if (message == 'beat') {
       _heartbeatCount++;
       print('❤️ Heartbeat #$_heartbeatCount');
-      
+
       if (_heartbeatCount >= 5) {
         print('Stopping heartbeat after 5 beats');
         context.timers.cancel('heartbeat');
@@ -90,7 +90,7 @@ class MetricsActor extends Actor {
       _metricsCollected++;
       final fakeMetric = 100 + (_metricsCollected * 10);
       print('📊 Collected metrics #$_metricsCollected: CPU=$fakeMetric%');
-      
+
       if (_metricsCollected >= 4) {
         print('Stopping metrics collection after 4 collections');
         context.timers.cancelAll();
@@ -110,21 +110,21 @@ class MultiTimerActor extends Actor {
   @override
   void preStart() {
     print('Starting multiple timers...');
-    
+
     // Single shot timer
     context.timers.startSingleTimer(
       'reminder',
       'reminder-message',
       Duration(seconds: 3),
     );
-    
+
     // Fixed delay timer
     context.timers.startTimerWithFixedDelay(
       'periodic-task',
       'periodic',
       Duration(seconds: 1),
     );
-    
+
     // Auto-stop after 8 seconds
     context.timers.startSingleTimer(
       'auto-stop',
@@ -153,7 +153,8 @@ class MultiTimerActor extends Actor {
   @override
   void postStop() {
     final activeTimers = context.timers.activeTimers;
-    print('Multi-timer actor stopped. Had ${activeTimers.length} active timers');
+    print(
+        'Multi-timer actor stopped. Had ${activeTimers.length} active timers');
   }
 }
 
@@ -165,25 +166,26 @@ void main() async {
   // Example 1: Session timeout
   print('1. Session Timeout Example:');
   final sessionActor = await system.spawn('session', () => SessionActor());
-  
+
   // Simulate user activity
   await Future.delayed(Duration(seconds: 3));
   sessionActor.tell(LocalMessage(payload: 'activity'));
-  
+
   await Future.delayed(Duration(seconds: 5));
   sessionActor.tell(LocalMessage(payload: 'activity'));
-  
+
   // Let it timeout naturally after this
   await Future.delayed(Duration(seconds: 12));
-  
+
   print('\n2. Heartbeat Example:');
-  final heartbeatActor = await system.spawn('heartbeat', () => HeartbeatActor());
+  final heartbeatActor =
+      await system.spawn('heartbeat', () => HeartbeatActor());
   await Future.delayed(Duration(seconds: 12));
-  
+
   print('\n3. Metrics Collection Example:');
   final metricsActor = await system.spawn('metrics', () => MetricsActor());
   await Future.delayed(Duration(seconds: 8));
-  
+
   print('\n4. Multiple Timers Example:');
   final multiActor = await system.spawn('multi', () => MultiTimerActor());
   await Future.delayed(Duration(seconds: 10));
@@ -191,4 +193,4 @@ void main() async {
   print('\n=== Shutting down system ===');
   await system.shutdown();
   print('All examples completed!');
-} 
+}

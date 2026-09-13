@@ -37,33 +37,38 @@ void main() {
 
       for (var i = 0; i < messageCount; i++) {
         stopwatch.start();
-        await actor.ask(LocalMessage(payload: 'ping'), const Duration(seconds: 1));
+        await actor.ask(
+            LocalMessage(payload: 'ping'), const Duration(seconds: 1));
         stopwatch.stop();
         totalLatency += stopwatch.elapsedMicroseconds;
         stopwatch.reset();
       }
 
       final avgLatency = totalLatency / messageCount;
-      print('Single Actor - Average latency: ${avgLatency.toStringAsFixed(2)} us');
+      print(
+          'Single Actor - Average latency: ${avgLatency.toStringAsFixed(2)} us');
     });
 
     test('measures latency for a pooled actor', () async {
       final pool = Pool(workerCount: 4);
-      final pooledActor = await system.spawn('pooled-ping', () => PingActor(), pool: pool);
+      final pooledActor =
+          await system.spawn('pooled-ping', () => PingActor(), pool: pool);
       const messageCount = 10000;
       final stopwatch = Stopwatch();
       var totalLatency = 0;
 
       for (var i = 0; i < messageCount; i++) {
         stopwatch.start();
-        await pooledActor.ask(LocalMessage(payload: 'ping'), const Duration(seconds: 1));
+        await pooledActor.ask(
+            LocalMessage(payload: 'ping'), const Duration(seconds: 1));
         stopwatch.stop();
         totalLatency += stopwatch.elapsedMicroseconds;
         stopwatch.reset();
       }
 
       final avgLatency = totalLatency / messageCount;
-      print('Pooled Actor - Average latency: ${avgLatency.toStringAsFixed(2)} us');
+      print(
+          'Pooled Actor - Average latency: ${avgLatency.toStringAsFixed(2)} us');
     });
   });
 }

@@ -12,7 +12,7 @@ class _TimerEntry {
   final Duration interval;
   final bool isRepeating;
   final bool isFixedRate;
-  
+
   _TimerEntry({
     required this.timer,
     required this.key,
@@ -24,7 +24,7 @@ class _TimerEntry {
 }
 
 /// Concrete implementation of TimerScheduler for Dactor actors.
-/// 
+///
 /// This implementation uses Dart's Timer class to schedule message delivery
 /// to actors and automatically handles cleanup when the actor is stopped.
 class DactorTimerScheduler implements TimerScheduler {
@@ -37,16 +37,16 @@ class DactorTimerScheduler implements TimerScheduler {
   @override
   void startSingleTimer(String key, dynamic message, Duration delay) {
     if (_disposed) return;
-    
+
     _cancelExisting(key);
-    
+
     final timer = Timer(delay, () {
       if (!_disposed) {
         _self.tell(LocalMessage(payload: message));
         _timers.remove(key);
       }
     });
-    
+
     _timers[key] = _TimerEntry(
       timer: timer,
       key: key,
@@ -60,7 +60,7 @@ class DactorTimerScheduler implements TimerScheduler {
   @override
   void startTimerWithFixedDelay(String key, dynamic message, Duration delay) {
     if (_disposed) return;
-    
+
     _cancelExisting(key);
     _scheduleFixedDelay(key, message, delay);
   }
@@ -68,15 +68,15 @@ class DactorTimerScheduler implements TimerScheduler {
   @override
   void startTimerAtFixedRate(String key, dynamic message, Duration interval) {
     if (_disposed) return;
-    
+
     _cancelExisting(key);
-    
+
     final timer = Timer.periodic(interval, (_) {
       if (!_disposed && _timers.containsKey(key)) {
         _self.tell(LocalMessage(payload: message));
       }
     });
-    
+
     _timers[key] = _TimerEntry(
       timer: timer,
       key: key,
@@ -109,9 +109,7 @@ class DactorTimerScheduler implements TimerScheduler {
 
   @override
   List<String> get activeTimers {
-    return _timers.keys
-        .where((key) => _timers[key]!.timer.isActive)
-        .toList();
+    return _timers.keys.where((key) => _timers[key]!.timer.isActive).toList();
   }
 
   /// Internal method to schedule fixed delay timers
@@ -123,7 +121,7 @@ class DactorTimerScheduler implements TimerScheduler {
         _scheduleFixedDelay(key, message, delay);
       }
     });
-    
+
     _timers[key] = _TimerEntry(
       timer: timer,
       key: key,
@@ -148,4 +146,4 @@ class DactorTimerScheduler implements TimerScheduler {
 
   /// Check if the scheduler has been disposed
   bool get isDisposed => _disposed;
-} 
+}

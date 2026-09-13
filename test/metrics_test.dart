@@ -7,7 +7,8 @@ class TestActor extends Actor {
   @override
   Future<void> onMessage(message) async {
     if (message == 'hello') {
-      context.sender?.tell(LocalMessage(payload: 'world'), sender: context.self);
+      context.sender
+          ?.tell(LocalMessage(payload: 'world'), sender: context.self);
     } else if (message == 'fail') {
       throw Exception('failed');
     }
@@ -38,7 +39,8 @@ void main() {
       expect(metrics.getGauge('actors.active'), 1);
     });
 
-    test('should increment stopped and decrement active actors count', () async {
+    test('should increment stopped and decrement active actors count',
+        () async {
       final actor = await system.spawn('test', () => TestActor());
       expect(metrics.getGauge('actors.active'), 1);
 
@@ -51,7 +53,8 @@ void main() {
     test('should increment processed messages count', () async {
       final actor = await system.spawn('test', () => TestActor());
       actor.tell(LocalMessage(payload: 'hello'));
-      await Future.delayed(Duration(milliseconds: 100)); // Allow time for message processing
+      await Future.delayed(
+          Duration(milliseconds: 100)); // Allow time for message processing
       expect(metrics.getCounter('messages.processed'), greaterThan(0));
     });
 

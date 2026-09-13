@@ -105,7 +105,8 @@ void main() {
       expect(id2, equals(id3));
     });
 
-    test('DeadLetter correlationId returns same value on multiple accesses', () {
+    test('DeadLetter correlationId returns same value on multiple accesses',
+        () {
       final ref = _FakeActorRef('test');
       final deadLetter = DeadLetter('msg', ref, ref);
 

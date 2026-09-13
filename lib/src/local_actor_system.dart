@@ -154,7 +154,8 @@ class LocalActorSystem implements ActorSystem {
 
     final actor = actorFactory();
     final mailbox = Mailbox(id, scheduleMailbox, onGauge: metrics.gauge);
-    final actorRef = LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
+    final actorRef =
+        LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
     final info = _ActorInfo(actor, actorFactory, supervision, mailbox,
         parentId: parentId);
 
@@ -170,7 +171,8 @@ class LocalActorSystem implements ActorSystem {
 
   /// Wires a fresh context into [info.actor], runs its `preStart`, and only
   /// then opens the mailbox for processing.
-  Future<void> _startIncarnation(_ActorInfo info, LocalActorRef actorRef) async {
+  Future<void> _startIncarnation(
+      _ActorInfo info, LocalActorRef actorRef) async {
     final actor = info.actor;
     actor.context = _ActorContext(actorRef, this);
     await actor.preStart();
