@@ -23,8 +23,7 @@ class RouterActor extends SupervisorActor {
   Future<void> preStart() async {
     super.preStart();
     for (var i = 0; i < _pool.workerCount; i++) {
-      final worker =
-          await context.spawn('${context.self.id}/worker-$i', _workerFactory);
+      final worker = await supervise('worker-$i', _workerFactory);
       _workers.add(worker);
       context.watch(worker);
     }

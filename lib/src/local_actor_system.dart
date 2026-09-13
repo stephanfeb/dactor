@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:meta/meta.dart';
+
 import 'package:dactor/src/actor.dart';
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/actor_system.dart';
@@ -16,7 +18,6 @@ import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor/src/supervision.dart';
 import 'package:dactor/src/routing/pool.dart';
 import 'package:dactor/src/routing/router_actor.dart';
-import 'package:dactor/src/supervisor_actor.dart';
 import 'package:dactor/src/event_bus.dart';
 import 'package:dactor/src/timer_scheduler.dart';
 import 'package:dactor/src/dactor_timer_scheduler.dart';
@@ -30,12 +31,18 @@ class _ActorInfo {
   final SupervisionStrategy? supervision;
   final Mailbox mailbox;
 
+  /// Id of the supervising parent, or null for an unsupervised actor. This is
+  /// the only source of truth for failure routing; the `/` in an actor's id is
+  /// a naming convention, not a relationship.
+  final String? parentId;
+
   /// False until the current incarnation's `preStart` has completed. The pump
   /// leaves the mailbox alone while this is false so no message reaches an
   /// actor that has not finished initialising.
   bool started = false;
 
-  _ActorInfo(this.actor, this.factory, this.supervision, this.mailbox);
+  _ActorInfo(this.actor, this.factory, this.supervision, this.mailbox,
+      {this.parentId});
 }
 
 class LocalActorSystem implements ActorSystem {
@@ -100,9 +107,46 @@ class LocalActorSystem implements ActorSystem {
     String id,
     T Function() actorFactory, {
     SupervisionStrategy? supervision,
+  }) {
+    return _spawn(id, actorFactory, supervision: supervision);
+  }
+
+  /// Spawns `'$parentId/$childId'` as a supervised child of [parentId].
+  ///
+  /// This is the only way to create a supervised actor. [parentId] must name
+  /// a live [Supervisor]; [childId] must be a single path segment.
+  @internal
+  Future<ActorRef> spawnChild(
+    String parentId,
+    String childId,
+    Actor Function() actorFactory, {
+    SupervisionStrategy? supervision,
+  }) async {
+    if (childId.isEmpty || childId.contains('/')) {
+      throw ArgumentError.value(
+          childId, 'childId', 'must be a non-empty single path segment');
+    }
+    final parent = _actorInfo[parentId];
+    if (parent == null || parent.actor is! Supervisor) {
+      throw ArgumentError.value(
+          parentId, 'parentId', 'is not a live Supervisor');
+    }
+    final spawned = await _spawn('$parentId/$childId', actorFactory,
+        supervision: supervision, parentId: parentId);
+    return spawned.ref;
+  }
+
+  Future<({ActorRef ref, Actor actor})> _spawn(
+    String id,
+    Actor Function() actorFactory, {
+    SupervisionStrategy? supervision,
+    String? parentId,
   }) async {
     if (_isShutdown) {
       throw StateError('Actor system is shutdown');
+    }
+    if (id.isEmpty) {
+      throw ArgumentError.value(id, 'id', 'must not be empty');
     }
     if (_actors.containsKey(id)) {
       throw ArgumentError('Actor with id $id already exists');
@@ -111,7 +155,8 @@ class LocalActorSystem implements ActorSystem {
     final actor = actorFactory();
     final mailbox = Mailbox(id, scheduleMailbox, onGauge: metrics.gauge);
     final actorRef = LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
-    final info = _ActorInfo(actor, actorFactory, supervision, mailbox);
+    final info = _ActorInfo(actor, actorFactory, supervision, mailbox,
+        parentId: parentId);
 
     _actors[id] = actorRef;
     _actorInfo[id] = info;
@@ -155,11 +200,10 @@ class LocalActorSystem implements ActorSystem {
         final message = mailbox.dequeue();
         if (message != null) {
           metrics.increment('messages.processed');
-          final actor = info.actor;
           final actorRef = _actors[mailbox.actorId]!;
 
           _processingActors.add(mailbox.actorId);
-          _processMessageAsync(actor, actorRef, message, mailbox);
+          _processMessageAsync(info, actorRef, message);
         }
       } else {
         await _waitForWork();
@@ -171,8 +215,13 @@ class LocalActorSystem implements ActorSystem {
   /// Processes a single message asynchronously without blocking the message pump.
   /// This allows actors to use natural await syntax (like await ask()) without
   /// causing deadlocks in the single-threaded message pump.
-  void _processMessageAsync(Actor actor, LocalActorRef actorRef, Message message, Mailbox mailbox) {
+  void _processMessageAsync(
+      _ActorInfo info, LocalActorRef actorRef, Message message) {
     final stopwatch = Stopwatch()..start();
+    // Pin the incarnation that handles this message; a restart during the
+    // handler must not redirect the bookkeeping below to the replacement.
+    final actor = info.actor;
+    final mailbox = info.mailbox;
 
     () async {
       try {
@@ -186,15 +235,13 @@ class LocalActorSystem implements ActorSystem {
         }
       } catch (e, s) {
         metrics.increment('actors.failed');
-        final supervisorId = actorRef.id.contains('/')
-            ? actorRef.id.substring(0, actorRef.id.lastIndexOf('/'))
-            : null;
+        final parentId = info.parentId;
+        final parent = parentId == null ? null : _actorInfo[parentId]?.actor;
         try {
-          if (supervisorId != null && _actorInfo.containsKey(supervisorId)) {
-            final supervisor =
-                _actorInfo[supervisorId]!.actor as SupervisorActor;
-            await supervisor.onChildFailure(actorRef, e, s);
+          if (parent is Supervisor) {
+            await parent.onChildFailure(actorRef, e, s);
           } else {
+            // Unsupervised (or the supervisor is gone): stop the actor.
             await stop(actorRef);
           }
         } catch (supervisionError) {

@@ -1,5 +1,17 @@
 ## Unreleased
 
+- **Supervision is routed by an explicit parent record, not by parsing `/` in
+  the actor id.** Previously the system took everything before the last `/`
+  as the supervisor and cast it with `as SupervisorActor`; an actor named
+  `plain/evil` under a non-supervisor `plain` therefore killed the whole
+  process with an unhandled `TypeError` on its first failure, and any actor
+  could attach itself to a foreign supervisor by choosing its name. Children
+  are now created through `SupervisorActor.supervise` (internally
+  `LocalActorSystem.spawnChild`), which records the parent, requires the
+  parent to be a live `Supervisor`, and rejects child ids that are empty or
+  contain `/`. Actors spawned with a `/` in their id through `spawn` are
+  ordinary unsupervised actors. `RouterActor` supervises its workers through
+  the same path. Added `test/supervision_guard_test.dart`.
 - **Restart now happens in place.** Previously a restart stopped the actor and
   spawned a new one, which created a new `ActorRef`; every reference held by
   other actors (including pool workers) then went to dead letters, pending

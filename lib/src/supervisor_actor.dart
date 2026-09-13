@@ -20,8 +20,9 @@ class SupervisorActor extends Actor implements Supervisor {
     String id,
     T Function() actorFactory,
   ) async {
-    final actorRef = await (context.system as LocalActorSystem).spawn(
-      '${context.self.id}/$id',
+    final actorRef = await (context.system as LocalActorSystem).spawnChild(
+      context.self.id,
+      id,
       actorFactory,
       supervision: strategy,
     );

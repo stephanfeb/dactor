@@ -25,7 +25,11 @@ abstract class ActorContext {
   /// stopped or restarted.
   TimerScheduler get timers;
 
-  /// Spawns a new child actor.
+  /// Spawns a new top-level actor.
+  ///
+  /// The new actor is *not* supervised by this one, whatever its [id] looks
+  /// like. To create a supervised child, extend [SupervisorActor] and call
+  /// `supervise`.
   Future<ActorRef> spawn<T extends Actor>(
       String id, T Function() actorFactory);
 
