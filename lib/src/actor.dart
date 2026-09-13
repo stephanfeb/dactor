@@ -32,7 +32,12 @@ abstract class ActorContext {
   /// Watches an actor for termination.
   void watch(ActorRef actor);
 
-  /// Restarts a child actor.
+  /// Restarts [child] in place.
+  ///
+  /// The child's [ActorRef], mailbox (including pending messages), watchers
+  /// and event-bus subscriptions are preserved. Only the [Actor] instance is
+  /// replaced: `postStop` runs on the old instance, its timers are cancelled,
+  /// and `preStart` runs on the new instance before it receives any message.
   Future<void> restart(ActorRef child);
 
   /// Publishes an event to the event bus.

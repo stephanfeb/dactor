@@ -7,7 +7,6 @@ class SupervisorActor extends Actor implements Supervisor {
   @override
   final SupervisionStrategy strategy;
   final _children = <String, ActorRef>{};
-  final _childFactories = <String, Function>{};
 
   SupervisorActor(this.strategy);
 
@@ -27,7 +26,6 @@ class SupervisorActor extends Actor implements Supervisor {
       supervision: strategy,
     );
     _children[id] = actorRef;
-    _childFactories[id] = actorFactory;
     return actorRef;
   }
 
@@ -39,28 +37,25 @@ class SupervisorActor extends Actor implements Supervisor {
   ) async {
     final decision = strategy.handle(child.id, error, stackTrace);
     if (decision == SupervisionDecision.restart) {
+      // Restarts happen in place: the child's ActorRef, mailbox, watchers and
+      // subscriptions survive, only the Actor instance is replaced.
       if (strategy.restartAll) {
-        // AllForOne: restart all children
-        final childrenToRestart = List.of(_children.entries);
-        for (final entry in childrenToRestart) {
-          final childId = entry.key;
-          await (context.system as LocalActorSystem).stop(entry.value);
-          await supervise(childId, _childFactories[childId]! as Actor Function());
+        // AllForOne: restart every child, failed one first.
+        await context.restart(child);
+        for (final ref in List.of(_children.values)) {
+          if (ref.id != child.id) {
+            await context.restart(ref);
+          }
         }
       } else {
-        // OneForOne: restart only the failed child
-        final childId = _findChildId(child);
-        if (childId != null) {
-          await (context.system as LocalActorSystem).stop(child);
-          await supervise(childId, _childFactories[childId]! as Actor Function());
-        }
+        // OneForOne: restart only the failed child.
+        await context.restart(child);
       }
     } else if (decision == SupervisionDecision.stop) {
       await (context.system as LocalActorSystem).stop(child);
       final childId = _findChildId(child);
       if (childId != null) {
         _children.remove(childId);
-        _childFactories.remove(childId);
       }
     }
     return decision;

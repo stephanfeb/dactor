@@ -1,5 +1,17 @@
 ## Unreleased
 
+- **Restart now happens in place.** Previously a restart stopped the actor and
+  spawned a new one, which created a new `ActorRef`; every reference held by
+  other actors (including pool workers) then went to dead letters, pending
+  messages were discarded, watchers received `Terminated`, and event-bus
+  subscriptions were lost. A restart now keeps the ref, mailbox, watchers and
+  subscriptions and only replaces the `Actor` instance: `postStop` on the old
+  one, timers cancelled, `preStart` on the new one. `SupervisorActor` and
+  `RouterActor` use this path. Messages are never dispatched to an actor
+  whose `preStart` has not completed. Added `test/restart_test.dart`.
+- Errors thrown while handling a child failure (for example a replacement's
+  `preStart` throwing) no longer escape as unhandled zone errors. The child is
+  stopped, `actors.supervision_failed` is incremented and the error is logged.
 - Add `dactor_test` as a dev dependency. The 1.2.0 release moved the test
   toolkit out of this package but never declared it, so 9 of the 12 test files
   could not load from a clean checkout. Added a GitHub Actions workflow that

@@ -274,7 +274,7 @@ final strategy = AllForOneStrategy(
 ```
 
 **Supervision Decisions**:
-- `SupervisionDecision.restart` - Restart the failed actor
+- `SupervisionDecision.restart` - Restart the failed actor in place. The `ActorRef`, its mailbox (pending messages are kept), watchers and event-bus subscriptions survive; only the `Actor` instance is replaced. `postStop` runs on the old instance and `preStart` on the new one. The message that caused the failure is not redelivered.
 - `SupervisionDecision.stop` - Stop the failed actor permanently
 - `SupervisionDecision.escalate` - Pass the failure up to the parent
 

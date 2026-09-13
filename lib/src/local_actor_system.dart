@@ -21,17 +21,26 @@ import 'package:dactor/src/event_bus.dart';
 import 'package:dactor/src/timer_scheduler.dart';
 import 'package:dactor/src/dactor_timer_scheduler.dart';
 
+/// Everything the system knows about one actor *cell*: the identity that
+/// survives restarts (mailbox, factory, strategy) plus the current [actor]
+/// incarnation, which a restart replaces.
 class _ActorInfo {
-  final Actor actor;
+  Actor actor;
+  final Actor Function() factory;
   final SupervisionStrategy? supervision;
+  final Mailbox mailbox;
 
-  _ActorInfo(this.actor, this.supervision);
+  /// False until the current incarnation's `preStart` has completed. The pump
+  /// leaves the mailbox alone while this is false so no message reaches an
+  /// actor that has not finished initialising.
+  bool started = false;
+
+  _ActorInfo(this.actor, this.factory, this.supervision, this.mailbox);
 }
 
 class LocalActorSystem implements ActorSystem {
   final _actors = <String, LocalActorRef>{};
   final _actorInfo = <String, _ActorInfo>{};
-  final _factoriesById = <String, Function>{};
   final _activeMailboxes = Queue<Mailbox>();
   final _scheduledMailboxes = <Mailbox>{};
   final _processingActors = <String>{};
@@ -102,22 +111,28 @@ class LocalActorSystem implements ActorSystem {
     final actor = actorFactory();
     final mailbox = Mailbox(id, scheduleMailbox, onGauge: metrics.gauge);
     final actorRef = LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
+    final info = _ActorInfo(actor, actorFactory, supervision, mailbox);
 
     _actors[id] = actorRef;
-    _actorInfo[id] = _ActorInfo(actor, supervision);
-    _factoriesById[id] = actorFactory;
+    _actorInfo[id] = info;
 
-    await _runActor(actor, actorRef);
+    await _startIncarnation(info, actorRef);
+    metrics.increment('actors.spawned');
+    metrics.gauge('actors.active', _actors.length.toDouble());
 
     return (ref: actorRef, actor: actor);
   }
 
-  Future<void> _runActor(Actor actor, LocalActorRef actorRef) async {
-    final context = _ActorContext(actorRef, this);
-    actor.context = context;
+  /// Wires a fresh context into [info.actor], runs its `preStart`, and only
+  /// then opens the mailbox for processing.
+  Future<void> _startIncarnation(_ActorInfo info, LocalActorRef actorRef) async {
+    final actor = info.actor;
+    actor.context = _ActorContext(actorRef, this);
     await actor.preStart();
-    metrics.increment('actors.spawned');
-    metrics.gauge('actors.active', _actors.length.toDouble());
+    info.started = true;
+    if (!info.mailbox.isEmpty) {
+      scheduleMailbox(info.mailbox);
+    }
   }
 
   void _messagePump() async {
@@ -131,10 +146,14 @@ class LocalActorSystem implements ActorSystem {
           continue;
         }
 
-        final message = mailbox.dequeue();
         final info = _actorInfo[mailbox.actorId];
+        if (info == null || !info.started) {
+          // Not (yet) runnable; _startIncarnation reschedules once ready.
+          continue;
+        }
 
-        if (message != null && info != null) {
+        final message = mailbox.dequeue();
+        if (message != null) {
           metrics.increment('messages.processed');
           final actor = info.actor;
           final actorRef = _actors[mailbox.actorId]!;
@@ -170,12 +189,27 @@ class LocalActorSystem implements ActorSystem {
         final supervisorId = actorRef.id.contains('/')
             ? actorRef.id.substring(0, actorRef.id.lastIndexOf('/'))
             : null;
-        if (supervisorId != null && _actorInfo.containsKey(supervisorId)) {
-          final supervisor =
-              _actorInfo[supervisorId]!.actor as SupervisorActor;
-          await supervisor.onChildFailure(actorRef, e, s);
-        } else {
-          stop(actorRef);
+        try {
+          if (supervisorId != null && _actorInfo.containsKey(supervisorId)) {
+            final supervisor =
+                _actorInfo[supervisorId]!.actor as SupervisorActor;
+            await supervisor.onChildFailure(actorRef, e, s);
+          } else {
+            await stop(actorRef);
+          }
+        } catch (supervisionError) {
+          // Supervision itself failed (for example the replacement's
+          // preStart threw). This closure is not awaited by anyone, so an
+          // escaping error would be an unhandled zone error; contain it and
+          // give up on the child.
+          metrics.increment('actors.supervision_failed',
+              tags: {'actorId': actorRef.id});
+          logger.record(LogRecord(
+              LogLevel.error,
+              'Supervision of ${actorRef.id} failed after $e: '
+              '$supervisionError',
+              actor: actorRef));
+          await stop(actorRef);
         }
       } finally {
         stopwatch.stop();
@@ -212,18 +246,44 @@ class LocalActorSystem implements ActorSystem {
     await _pumpSignal.future;
   }
 
+  /// Restarts the actor with [id] in place.
+  ///
+  /// The [LocalActorRef], its mailbox (including every pending message),
+  /// watchers and event-bus subscriptions are kept. Only the [Actor] instance
+  /// is replaced: `postStop` runs on the old incarnation, its timers are
+  /// cancelled, and `preStart` runs on the new one before any further message
+  /// is delivered. The message that triggered the failure is not redelivered.
   Future<void> _restartActor(String id) async {
+    if (_isShutdown) {
+      return;
+    }
     final actorRef = _actors[id];
     final info = _actorInfo[id];
-    if (actorRef != null && info != null) {
-      metrics.increment('actors.restarted', tags: {'actorId': id});
-      final actorFactory = _factoriesById[id];
-      if (actorFactory != null) {
-        final supervision = info.supervision;
-        await stop(actorRef);
-        await spawn(id, actorFactory as Actor Function(),
-            supervision: supervision);
-      }
+    if (actorRef == null || info == null) {
+      return;
+    }
+    metrics.increment('actors.restarted', tags: {'actorId': id});
+
+    info.started = false;
+    final old = info.actor;
+    final timers = old.context.timers;
+    if (timers is DactorTimerScheduler) {
+      timers.dispose();
+    }
+    try {
+      old.postStop();
+    } catch (e) {
+      // A failing postStop must not prevent the restart.
+      metrics.increment('actors.post_stop_failed', tags: {'actorId': id});
+    }
+
+    info.actor = info.factory();
+    try {
+      await _startIncarnation(info, actorRef);
+    } catch (e) {
+      // The replacement could not initialise; there is nothing left to run.
+      await _stopActor(actorRef);
+      rethrow;
     }
   }
 
@@ -257,7 +317,6 @@ class LocalActorSystem implements ActorSystem {
       actorRef.stop();
       _actors.remove(actor.id);
       _actorInfo.remove(actor.id);
-      _factoriesById.remove(actor.id);
       metrics.gauge('actors.active', _actors.length.toDouble());
       metrics.increment('actors.stopped');
     } else {
@@ -290,7 +349,6 @@ class LocalActorSystem implements ActorSystem {
     }
     _actors.clear();
     _actorInfo.clear();
-    _factoriesById.clear();
     deadLetterQueue.dispose();
     _eventBus.dispose();
   }
