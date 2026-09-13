@@ -232,6 +232,14 @@ class LocalActorSystem implements ActorSystem {
     if (_isShutdown) {
       return;
     }
+    await _stopActor(actor);
+  }
+
+  /// Stops [actor] regardless of the shutdown flag.
+  ///
+  /// [stop] refuses work once shutdown has begun, but [shutdown] itself must
+  /// still be able to tear every actor down, so it calls this directly.
+  Future<void> _stopActor(ActorRef actor) async {
     final actorRef = _actors[actor.id];
     if (actorRef is LocalActorRef) {
       final info = _actorInfo[actor.id];
@@ -275,8 +283,10 @@ class LocalActorSystem implements ActorSystem {
     _isShutdown = true;
     _wakeUpPump();
     metrics.increment('system.shutdown');
-    for (final actorRef in List.from(_actors.values)) {
-      await stop(actorRef);
+    // Stop in reverse spawn order so children (spawned after their parents)
+    // are torn down before the actors that created them.
+    for (final actorRef in List<LocalActorRef>.of(_actors.values).reversed) {
+      await _stopActor(actorRef);
     }
     _actors.clear();
     _actorInfo.clear();

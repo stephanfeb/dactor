@@ -5,6 +5,11 @@
   could not load from a clean checkout. Added a GitHub Actions workflow that
   runs `dart analyze` and the unit tests on every push and pull request.
 - README: the testing section now points at the `dactor_test` package.
+- Fix `shutdown()` not stopping any actor. `stop()` returned early once the
+  shutdown flag was set, so `postStop` never ran, timers kept firing (keeping
+  the isolate alive), refs stayed `isAlive`, and late messages were silently
+  queued instead of dead-lettered. Actors are now torn down in reverse spawn
+  order during shutdown. Added `test/shutdown_test.dart`.
 
 ## 1.2.0
 
