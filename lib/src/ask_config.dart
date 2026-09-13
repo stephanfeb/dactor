@@ -19,6 +19,11 @@ class AskConfig {
   final Duration maxBackoffDuration;
 
   /// Whether to enable automatic retries for ask operations.
+  ///
+  /// Off by default. A retry re-sends the request, so a merely slow actor
+  /// receives the same message again; only enable this for requests that are
+  /// idempotent. Every attempt carries the same `correlationId`, so a receiver
+  /// can detect and deduplicate retries.
   final bool enableRetries;
 
   /// Types of errors that should trigger a retry (by default, only TimeoutException).
@@ -30,22 +35,28 @@ class AskConfig {
     this.retryBackoffBase = const Duration(milliseconds: 100),
     this.retryBackoffMultiplier = 2.0,
     this.maxBackoffDuration = const Duration(seconds: 10),
-    this.enableRetries = true,
+    this.enableRetries = false,
     Set<Type>? retryableErrorTypes,
   }) : retryableErrorTypes = retryableErrorTypes ?? {TimeoutException};
 
-  /// Creates a development-friendly configuration with longer timeouts.
+  /// Creates a development-friendly configuration with longer timeouts and
+  /// retries enabled. Choosing this preset opts in to re-sending timed-out
+  /// requests; see [enableRetries].
   factory AskConfig.development() => AskConfig(
         defaultTimeout: Duration(seconds: 30),
         maxRetries: 5,
         retryBackoffBase: Duration(milliseconds: 200),
+        enableRetries: true,
       );
 
-  /// Creates a production configuration with shorter timeouts and faster retries.
+  /// Creates a production configuration with shorter timeouts and a small
+  /// number of fast retries. Choosing this preset opts in to re-sending
+  /// timed-out requests; see [enableRetries].
   factory AskConfig.production() => AskConfig(
         defaultTimeout: Duration(seconds: 3),
         maxRetries: 2,
         retryBackoffBase: Duration(milliseconds: 50),
+        enableRetries: true,
       );
 
   /// Creates a configuration with retries disabled.

@@ -85,6 +85,7 @@ void main() {
       final config = ActorSystemConfig(
         askConfig: AskConfig(
           defaultTimeout: Duration(milliseconds: 50),
+          enableRetries: true, // retries are opt-in
           maxRetries: 2,
           retryBackoffBase: Duration(milliseconds: 10),
           retryBackoffMultiplier: 2.0,

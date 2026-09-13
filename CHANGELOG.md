@@ -1,5 +1,12 @@
 ## Unreleased
 
+- **`ask()` no longer retries by default.** `AskConfig()` now has
+  `enableRetries: false`. A retry re-sends the request, so with the old
+  default a slow (not failed) actor executed the same command up to four
+  times, and an ask to a dead actor blocked the caller for about 20 s.
+  `AskConfig.development()` and `AskConfig.production()` still enable
+  retries explicitly. Retries keep the same `correlationId` across attempts so
+  receivers can deduplicate.
 - **A system built without a config no longer collects metrics or traces.**
   The previous defaults, `InMemoryMetricsCollector` and
   `InMemoryTraceCollector`, kept a timing sample for every message and a
