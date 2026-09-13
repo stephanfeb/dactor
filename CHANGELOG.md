@@ -1,4 +1,4 @@
-## Unreleased
+## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has
   `enableRetries: false`. A retry re-sends the request, so with the old
