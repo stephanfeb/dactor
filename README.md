@@ -42,17 +42,15 @@ class CounterActor extends Actor {
 
   @override
   Future<void> onMessage(dynamic message) async {
-    if (message is LocalMessage) {
-      switch (message.payload) {
-        case 'increment':
-          _count++;
-          print('Count: $_count');
-          message.sender?.tell(LocalMessage(payload: _count));
-          break;
-        case 'get':
-          message.sender?.tell(LocalMessage(payload: _count));
-          break;
-      }
+    // onMessage receives the payload of the LocalMessage, not the envelope.
+    // Reply to the sender through the actor's context.
+    switch (message) {
+      case 'increment':
+        _count++;
+        print('Count: $_count');
+        context.sender?.tell(LocalMessage(payload: _count));
+      case 'get':
+        context.sender?.tell(LocalMessage(payload: _count));
     }
   }
 
@@ -65,7 +63,7 @@ class CounterActor extends Actor {
 
 void main() async {
   // Create actor system
-  final system = LocalActorSystem();
+  final system = ActorSystem.create();
   
   // Spawn an actor
   final counter = await system.spawn('counter', () => CounterActor());
@@ -74,12 +72,12 @@ void main() async {
   counter.tell(LocalMessage(payload: 'increment'));
   counter.tell(LocalMessage(payload: 'increment'));
   
-  // Ask pattern (request-response)
-  final count = await counter.ask(
+  // Ask pattern (request-response): completes with the reply's payload
+  final count = await counter.ask<int>(
     LocalMessage(payload: 'get'),
     Duration(seconds: 1),
   );
-  print('Current count: ${(count as LocalMessage).payload}');
+  print('Current count: $count');
   
   await system.shutdown();
 }

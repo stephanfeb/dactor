@@ -7,6 +7,11 @@
   `AskConfig.development()` and `AskConfig.production()` still enable
   retries explicitly. Retries keep the same `correlationId` across attempts so
   receivers can deduplicate.
+- Fixed the Quick Start in the README and `example/dactor_example.dart`. Both
+  tested `message is LocalMessage` inside `onMessage`, which is never true
+  because actors receive the payload; the counter never incremented and the
+  ask timed out. They now switch on the payload and reply via
+  `context.sender`.
 - **A system built without a config no longer collects metrics or traces.**
   The previous defaults, `InMemoryMetricsCollector` and
   `InMemoryTraceCollector`, kept a timing sample for every message and a
