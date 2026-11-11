@@ -61,6 +61,15 @@ final class NoProcExit extends ExitReason {
   String toString() => 'noproc';
 }
 
+/// The connection to the node the actor lives on was lost. The actor itself
+/// may well be alive; from here there is no telling.
+final class NoConnectionExit extends ExitReason {
+  const NoConnectionExit();
+
+  @override
+  String toString() => 'noconnection';
+}
+
 /// Delivered as a message to an actor that traps exits when an actor it is
 /// linked to ends.
 ///

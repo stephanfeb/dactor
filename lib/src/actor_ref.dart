@@ -1,3 +1,4 @@
+import 'exit_reason.dart';
 import 'message.dart';
 
 /// A reference to an actor, which can be used to send messages to it.
@@ -48,4 +49,20 @@ abstract class ActorRef {
   /// When the target actor is terminated, a [Terminated] message is sent to the
   /// watcher.
   void watch(ActorRef watcher);
+}
+
+/// A reference to an actor that lives outside this system, on another node.
+///
+/// Implemented by transports. It lets a local actor link with the actor
+/// behind the reference: the system records the link on its side and tells
+/// the reference, which carries it to the other node.
+abstract interface class ForeignActorRef implements ActorRef {
+  /// [local] has linked with the actor behind this reference.
+  void linkFrom(ActorRef local);
+
+  /// [local] has removed its link.
+  void unlinkFrom(ActorRef local);
+
+  /// [local], which was linked with the actor behind this reference, ended.
+  void linkedExit(ActorRef local, ExitReason reason);
 }

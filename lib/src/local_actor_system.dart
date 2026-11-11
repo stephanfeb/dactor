@@ -143,7 +143,7 @@ class _Incarnation extends TombstoneZone {
   ExitReason? exitReason;
 
   /// The actors this incarnation is linked with.
-  Set<LocalActorRef>? links;
+  Set<ActorRef>? links;
 
   Completer<void>? _idle;
 
@@ -585,6 +585,11 @@ class LocalActorSystem implements ActorSystem {
     if (links == null) return;
     inc.links = null;
     for (final peerRef in links) {
+      if (peerRef is ForeignActorRef) {
+        peerRef.linkedExit(from, reason);
+        continue;
+      }
+      if (peerRef is! LocalActorRef) continue;
       final peerInfo = _actorInfo[peerRef.id];
       if (peerInfo == null || !identical(_actors[peerRef.id], peerRef)) {
         continue;
@@ -609,12 +614,53 @@ class LocalActorSystem implements ActorSystem {
     }
   }
 
+  /// Records, on behalf of another node, that [foreign] has linked with the
+  /// local actor [local]. Returns false if [local] is not alive, in which
+  /// case nothing was recorded.
+  ///
+  /// For transports. It does not call back into [foreign].
+  bool linkForeign(ActorRef local, ForeignActorRef foreign) => _sys(() {
+        final info = _actorInfo[local.id];
+        if (info == null ||
+            !identical(_actors[local.id], local) ||
+            info.inc.retiring ||
+            info.inc.isDead) {
+          return false;
+        }
+        (info.inc.links ??= {}).add(foreign);
+        return true;
+      });
+
+  /// Forgets a link recorded by [linkForeign] or made by `context.link`.
+  /// For transports. It does not call back into [foreign].
+  void unlinkForeign(ActorRef local, ForeignActorRef foreign) {
+    if (identical(_actors[local.id], local)) {
+      _actorInfo[local.id]?.inc.links?.remove(foreign);
+    }
+  }
+
+  /// Tells the local actor [local] that [foreign], which it was linked
+  /// with, has ended, and dissolves the link. Does nothing if they were not
+  /// linked. For transports.
+  void foreignExit(
+          ActorRef local, ForeignActorRef foreign, ExitReason reason) =>
+      _sys(() {
+        final info = _actorInfo[local.id];
+        final actorRef = _actors[local.id];
+        if (info == null || actorRef == null || !identical(actorRef, local)) {
+          return;
+        }
+        if (info.inc.links?.remove(foreign) ?? false) {
+          _deliverExit(info, actorRef, foreign, reason);
+        }
+      });
+
   void _link(_ActorContext context, ActorRef other) {
     final self = context.self;
     if (other.id == self.id) return;
-    if (other is! LocalActorRef) {
+    if (other is! LocalActorRef && other is! ForeignActorRef) {
       throw ArgumentError.value(
-          other, 'other', 'is not an actor of this system');
+          other, 'other', 'is not an actor this system can link to');
     }
     _sys(() {
       final info = _actorInfo[self.id];
@@ -624,6 +670,10 @@ class LocalActorSystem implements ActorSystem {
           actorRef == null ||
           !identical(info.inc.actor.context, context) ||
           info.inc.retiring) {
+        return;
+      }
+      if (other is ForeignActorRef) {
+        if ((info.inc.links ??= {}).add(other)) other.linkFrom(actorRef);
         return;
       }
       final peerInfo = _actorInfo[other.id];
@@ -646,7 +696,11 @@ class LocalActorSystem implements ActorSystem {
         !identical(info.inc.actor.context, context)) {
       return;
     }
-    info.inc.links?.remove(other);
+    final removed = info.inc.links?.remove(other) ?? false;
+    if (other is ForeignActorRef) {
+      if (removed) other.unlinkFrom(actorRef);
+      return;
+    }
     if (identical(_actors[other.id], other)) {
       _actorInfo[other.id]?.inc.links?.remove(actorRef);
     }

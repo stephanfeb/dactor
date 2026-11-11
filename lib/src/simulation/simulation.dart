@@ -232,6 +232,9 @@ class Simulation {
   late final LocalActorSystem _system;
   late final Zone _zone;
 
+  /// Every simulated system: [_system] first, then those from [addSystem].
+  final _systems = <LocalActorSystem>[];
+
   final _microtasks = Queue<void Function()>();
   final _timers = <_SimTimer>[];
   final _settling = <Completer<void>>[];
@@ -247,6 +250,16 @@ class Simulation {
 
   /// The simulated actor system. It is shut down when the test returns.
   LocalActorSystem get system => _system;
+
+  /// Creates another actor system in the same simulation, for tests of
+  /// several nodes. All systems share the scheduler, the clock and the seed,
+  /// and all are shut down when the test returns.
+  LocalActorSystem addSystem([ActorSystemConfig? config]) {
+    final system = _zone.run(() => LocalActorSystem.stepped(
+        config ?? ActorSystemConfig(logCollector: const NoOpLogCollector())));
+    _systems.add(system);
+    return system;
+  }
 
   /// Virtual time since the run started.
   Duration get elapsed => _now;
@@ -345,7 +358,10 @@ class Simulation {
       _flushMicrotasks();
       if (finished()) return;
 
-      final runnable = _system.runnableActors;
+      final runnable = [
+        for (final system in _systems)
+          for (final id in system.runnableActors) (system, id)
+      ];
       final due = [
         for (final timer in _timers)
           if (timer._due <= _now) timer
@@ -358,7 +374,8 @@ class Simulation {
         }
         final pick = random.nextInt(choices);
         if (pick < runnable.length) {
-          _system.step(runnable[pick], fault: _onDelivery);
+          final (system, id) = runnable[pick];
+          system.step(id, fault: _onDelivery);
         } else {
           _trace.add('+${_ms(_now)} timer');
           due[pick - runnable.length]._fire();
@@ -398,6 +415,7 @@ class Simulation {
     _zone.run(() {
       _system = LocalActorSystem.stepped(
           config ?? ActorSystemConfig(logCollector: const NoOpLogCollector()));
+      _systems.add(_system);
       Future<T>.sync(() => body(this)).then((value) {
         result = value;
         done = true;
@@ -419,7 +437,9 @@ class Simulation {
     _settling.clear();
     var down = false;
     try {
-      _zone.run(() => _system.shutdown().whenComplete(() => down = true));
+      _zone.run(() => Future.wait(
+              [for (final system in _systems.reversed) system.shutdown()])
+          .whenComplete(() => down = true));
       _drive(() => down);
     } catch (e, s) {
       if (e is! SimulationDeadlock) failure ??= (e, s);

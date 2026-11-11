@@ -11,6 +11,7 @@ String _describe(ExitReason reason) => switch (reason) {
       ShutdownExit() => 'shutdown',
       KilledExit() => 'killed',
       NoProcExit() => 'noproc',
+      NoConnectionExit() => 'noconnection',
       ErrorExit(:final error) => switch (error) {
           LinkedActorExited(:final from, :final reason) =>
             'linked(${from.id}, ${_describe(reason)})',

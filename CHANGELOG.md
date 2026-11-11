@@ -196,6 +196,24 @@ Phase 4: actors in their own isolate.
   and `tool/probes/isolated_throughput.dart`.
 - Example: `example/isolated_example.dart`.
 
+Phase 5, first part: remote references (in `packages/dactor_remote`).
+
+- **`Actor.context` is no longer marked `@internal`.** The annotation made
+  the analyzer warn on every use of `context` in an actor written outside
+  this package, which is every actor a user writes. This is in 1.3.0 too.
+- New exit reason **`NoConnectionExit`**. `ExitReason` is sealed, so an
+  exhaustive `switch` over it needs the new case.
+- **`ForeignActorRef`**, with `LocalActorSystem.linkForeign`,
+  `unlinkForeign` and `foreignExit`: what a transport needs to link local
+  actors with actors on other nodes. `context.link` accepts a
+  `ForeignActorRef`.
+- `Simulation.addSystem()` creates further actor systems in one simulation,
+  for tests of several nodes.
+- New package `packages/dactor_remote` (not published): `RemoteNode`,
+  remote `tell`, `ask`, `watch` and `link`, a codec registry over CBOR,
+  capability tokens, remote spawn by behaviour name, an in-memory network
+  that runs under the simulator, and a plain TCP transport.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has
