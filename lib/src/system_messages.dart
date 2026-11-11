@@ -5,12 +5,15 @@ const _uuid = Uuid();
 
 class Terminated implements Message {
   final ActorRef actor;
+
+  /// Why the actor ended.
+  final ExitReason reason;
   @override
   final String correlationId;
   @override
   final DateTime timestamp;
 
-  Terminated(this.actor)
+  Terminated(this.actor, {this.reason = const NormalExit()})
       : correlationId = _uuid.v4(),
         timestamp = DateTime.now();
 

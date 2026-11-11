@@ -301,6 +301,47 @@ system.kill(ref);        // immediate
 - A killed handler is cut off at the `await` it is suspended on. **`finally` blocks around that `await` do not run**, so release sockets, files and subscriptions in `postStop`.
 - An actor that stops itself (`context.system.stop(context.self)`) is cut off at that call: code after it does not run.
 
+### Links and Exit Reasons
+
+`watch` tells you that an actor ended. A link ties two actors' fates together.
+
+```dart
+class Session extends Actor {
+  final ActorRef connection;
+  Session(this.connection);
+
+  @override
+  void preStart() => context.link(connection);
+  // If the connection actor fails, this session fails too,
+  // and its supervisor restarts or stops it.
+}
+```
+
+- A link works in both directions. If either actor ends abnormally, the other fails with `LinkedActorExited` and its supervisor decides what to do. Without a supervisor it stops.
+- A normal exit (`system.stop`) does not propagate.
+- An actor that sets `context.trapExits = true` in `preStart` is not brought down. It receives an `ExitSignal(from, reason)` message instead, for normal exits too.
+- A restart ends the old incarnation, so linked actors are signalled and the link is gone. Link in `preStart` if the pairing should survive restarts.
+- Linking to an actor that is already dead signals `NoProcExit` straight away.
+
+Both `ExitSignal` and `Terminated` carry an `ExitReason`:
+
+| Reason | Meaning |
+|---|---|
+| `NormalExit` | Stopped on request |
+| `ShutdownExit` | Stopped by its parent, or the system shut down |
+| `KilledExit` | `kill`, or it did not stop within the stop timeout |
+| `ErrorExit(error, stackTrace)` | It failed |
+| `NoProcExit` | It did not exist |
+
+```dart
+switch (message) {
+  case Terminated(:final actor, reason: ErrorExit(:final error)):
+    print('${actor.id} crashed: $error');
+  case Terminated(:final actor):
+    print('${actor.id} is gone');
+}
+```
+
 Limits: a handler in a synchronous loop cannot be interrupted, and work an actor starts through `Zone.root.run` is outside its zone.
 
 ## ⚡ Actor Pooling for Scalability

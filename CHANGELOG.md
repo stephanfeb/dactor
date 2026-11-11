@@ -70,6 +70,25 @@ Phase 1, first part: a zone per actor.
 - Cost: an idle actor takes about 1.7 KB, up from 1.1 KB, and single-actor
   throughput is 5 to 10 percent lower.
 
+Phase 1, second part: exit reasons and links.
+
+- Added `ExitReason`, a sealed type saying why an actor ended: `NormalExit`
+  (stopped on request), `ShutdownExit` (stopped by its parent or by system
+  shutdown), `KilledExit` (`kill`, or the stop timeout ran out), `ErrorExit`
+  (it failed; carries the error and stack trace) and `NoProcExit`.
+- `Terminated` now has a `reason`.
+- Added links: `context.link(other)` and `context.unlink(other)`. When one
+  linked actor ends abnormally the other fails with `LinkedActorExited`, and
+  its supervisor decides what happens to it; with no supervisor it stops,
+  with the same reason. A normal exit does not propagate.
+- Added `context.trapExits`. An actor that sets it receives exits of linked
+  actors, normal ones included, as `ExitSignal` messages and is not brought
+  down.
+- A restart counts as the old incarnation ending: linked actors are
+  signalled and the link is dissolved. Link in `preStart` to keep a pairing
+  across restarts. Watchers are different: they are still told only when the
+  actor is gone for good.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

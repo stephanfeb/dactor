@@ -4,6 +4,7 @@ import 'package:meta/meta.dart';
 
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/actor_system.dart';
+import 'package:dactor/src/exit_reason.dart';
 import 'package:dactor/src/timer_scheduler.dart';
 
 /// The context of an actor, providing information about its environment and
@@ -34,6 +35,29 @@ abstract class ActorContext {
 
   /// Watches an actor for termination.
   void watch(ActorRef actor);
+
+  /// Links this actor with [other], in both directions.
+  ///
+  /// When either one ends, the other is told. An actor that traps exits (see
+  /// [trapExits]) receives an [ExitSignal] message. One that does not ignores
+  /// a normal exit and fails with [LinkedActorExited] on any other, which its
+  /// supervisor then handles like any failure.
+  ///
+  /// A link belongs to the two incarnations that made it. A restart of either
+  /// actor counts as that incarnation ending: the other side is signalled and
+  /// the link is gone. Link again in `preStart` to keep the pairing.
+  ///
+  /// Linking to an actor that is already dead signals [NoProcExit] at once.
+  void link(ActorRef other);
+
+  /// Removes the link with [other], if there is one.
+  void unlink(ActorRef other);
+
+  /// Whether exit signals from linked actors arrive as [ExitSignal] messages
+  /// instead of bringing this actor down. False by default, and again after
+  /// every restart; set it in `preStart`.
+  bool get trapExits;
+  set trapExits(bool value);
 
   /// Restarts [child] in place.
   ///

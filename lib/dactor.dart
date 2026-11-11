@@ -9,6 +9,7 @@ export 'src/ask_config.dart';
 export 'src/askable_message.dart';
 export 'src/dead_letter_queue.dart';
 export 'src/event_bus.dart';
+export 'src/exit_reason.dart';
 export 'src/local_actor_ref.dart';
 export 'src/local_actor_system.dart';
 export 'src/local_message.dart';

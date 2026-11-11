@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/dead_letter_queue.dart';
+import 'package:dactor/src/exit_reason.dart';
 import 'package:dactor/src/mailbox.dart';
 import 'package:dactor/src/local_message.dart';
 import 'package:dactor/src/message.dart';
@@ -189,12 +190,12 @@ class LocalActorRef implements ActorRef {
     _watchers.add(watcher);
   }
 
-  void stop() {
+  void stop([ExitReason reason = const NormalExit()]) {
     if (!_isAlive) return;
     _isAlive = false;
     _mailbox.dispose();
     for (final watcher in _watchers) {
-      watcher.tell(LocalMessage(payload: Terminated(this)));
+      watcher.tell(LocalMessage(payload: Terminated(this, reason: reason)));
     }
   }
 }

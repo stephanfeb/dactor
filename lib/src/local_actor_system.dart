@@ -20,6 +20,7 @@ import 'package:dactor/src/supervision.dart';
 import 'package:dactor/src/routing/pool.dart';
 import 'package:dactor/src/routing/router_actor.dart';
 import 'package:dactor/src/event_bus.dart';
+import 'package:dactor/src/exit_reason.dart';
 import 'package:dactor/src/timer_scheduler.dart';
 import 'package:dactor/src/dactor_timer_scheduler.dart';
 
@@ -48,6 +49,13 @@ class _Incarnation extends TombstoneZone {
   /// Settles the bookkeeping of the handler in flight. Called when the zone
   /// is killed, because that handler's future will then never complete.
   void Function()? abandon;
+
+  /// Why this incarnation is ending, once that is known: set when it fails
+  /// or is killed, cleared again if supervision resumes it.
+  ExitReason? exitReason;
+
+  /// The actors this incarnation is linked with.
+  Set<LocalActorRef>? links;
 
   Completer<void>? _idle;
 
@@ -335,13 +343,13 @@ class LocalActorSystem implements ActorSystem {
 
     try {
       await _startIncarnation(info, actorRef);
-    } catch (_) {
+    } catch (e, s) {
       // preStart failed: the actor never existed. Free the id and release
       // whatever was registered, without running postStop on an actor that
       // did not finish initialising.
       metrics.increment('actors.start_failed', tags: {'actorId': id});
       if (identical(_actorInfo[id], info)) {
-        await _stopActor(actorRef);
+        await _stopActor(actorRef, reason: ErrorExit(e, s));
       }
       rethrow;
     }
@@ -415,6 +423,9 @@ class LocalActorSystem implements ActorSystem {
 
   /// Ends [inc]: runs `postStop` if it is owed one, then switches its zone
   /// off so that nothing it left behind can run. Idempotent.
+  ///
+  /// The caller follows up with [_signalLinks], once anything that watchers
+  /// should hear about first has been done.
   void _finishRetire(_Incarnation inc, String id) {
     inc.retiring = true;
     _disposeTimers(inc.actor);
@@ -432,6 +443,80 @@ class LocalActorSystem implements ActorSystem {
     inc.abandon?.call();
   }
 
+  /// Tells every actor linked with [inc] that it has ended, and dissolves
+  /// the links.
+  void _signalLinks(_Incarnation inc, LocalActorRef from, ExitReason reason) {
+    final links = inc.links;
+    if (links == null) return;
+    inc.links = null;
+    for (final peerRef in links) {
+      final peerInfo = _actorInfo[peerRef.id];
+      if (peerInfo == null || !identical(_actors[peerRef.id], peerRef)) {
+        continue;
+      }
+      peerInfo.inc.links?.remove(from);
+      _deliverExit(peerInfo, peerRef, from, reason);
+    }
+  }
+
+  /// Delivers an exit signal about [from] to the current incarnation of
+  /// [info].
+  void _deliverExit(_ActorInfo info, LocalActorRef actorRef, ActorRef from,
+      ExitReason reason) {
+    final inc = info.inc;
+    if (_isShutdown || inc.retiring || inc.isDead) return;
+    if ((inc.actor.context as _ActorContext).trapExits) {
+      actorRef.tell(LocalMessage(payload: ExitSignal(from, reason)));
+    } else if (!reason.isNormal) {
+      _fail(info, actorRef, inc, LinkedActorExited(from, reason),
+          StackTrace.current,
+          reason: reason);
+    }
+  }
+
+  void _link(_ActorContext context, ActorRef other) {
+    final self = context.self;
+    if (other.id == self.id) return;
+    if (other is! LocalActorRef) {
+      throw ArgumentError.value(
+          other, 'other', 'is not an actor of this system');
+    }
+    _sys(() {
+      final info = _actorInfo[self.id];
+      final actorRef = _actors[self.id];
+      // A context that outlived its incarnation links nothing.
+      if (info == null ||
+          actorRef == null ||
+          !identical(info.inc.actor.context, context) ||
+          info.inc.retiring) {
+        return;
+      }
+      final peerInfo = _actorInfo[other.id];
+      if (peerInfo == null ||
+          !identical(_actors[other.id], other) ||
+          peerInfo.inc.retiring) {
+        _deliverExit(info, actorRef, other, const NoProcExit());
+        return;
+      }
+      (info.inc.links ??= {}).add(other);
+      (peerInfo.inc.links ??= {}).add(actorRef);
+    });
+  }
+
+  void _unlink(_ActorContext context, ActorRef other) {
+    final info = _actorInfo[context.self.id];
+    final actorRef = _actors[context.self.id];
+    if (info == null ||
+        actorRef == null ||
+        !identical(info.inc.actor.context, context)) {
+      return;
+    }
+    info.inc.links?.remove(other);
+    if (identical(_actors[other.id], other)) {
+      _actorInfo[other.id]?.inc.links?.remove(actorRef);
+    }
+  }
+
   /// Whether a graceful stop or restart should wait for [inc] to finish what
   /// it is doing. It does not wait for a handler that has already failed, nor
   /// for the handler that is itself asking for the stop.
@@ -442,6 +527,7 @@ class LocalActorSystem implements ActorSystem {
   /// most [_stopTimeout].
   Future<void> _awaitIdle(_Incarnation inc, String id) {
     return inc.idle.timeout(_stopTimeout, onTimeout: () {
+      inc.exitReason ??= const KilledExit();
       metrics.increment('actors.stop_timed_out', tags: {'actorId': id});
       logger.record(LogRecord(
           LogLevel.warning,
@@ -607,12 +693,17 @@ class LocalActorSystem implements ActorSystem {
   /// Reached two ways: a message handler threw, or an error escaped the
   /// actor's zone. Only the first failure of an incarnation counts; while its
   /// supervisor decides, the actor receives nothing. Never throws.
+  ///
+  /// [reason] is the exit reason the actor ends with if supervision stops or
+  /// restarts it. It defaults to an [ErrorExit] carrying [error].
   Future<void> _fail(_ActorInfo info, LocalActorRef actorRef, _Incarnation inc,
-      Object error, StackTrace stackTrace) async {
+      Object error, StackTrace stackTrace,
+      {ExitReason? reason}) async {
     if (inc.failed || inc.retiring || inc.isDead || !_isCurrent(info, inc)) {
       return;
     }
     inc.failed = true;
+    inc.exitReason = reason ?? ErrorExit(error, stackTrace);
     info.suspended = true;
     metrics.increment('actors.failed');
     try {
@@ -639,6 +730,7 @@ class LocalActorSystem implements ActorSystem {
     if (_isCurrent(info, inc) && !inc.retiring) {
       // Resumed: same incarnation, same state, next message.
       inc.failed = false;
+      inc.exitReason = null;
       info.suspended = false;
       if (!info.mailbox.isEmpty) {
         scheduleMailbox(info.mailbox);
@@ -761,6 +853,7 @@ class LocalActorSystem implements ActorSystem {
       await _stopChildren(info, requester);
     }
     _finishRetire(old, id);
+    _signalLinks(old, actorRef, old.exitReason ?? const ShutdownExit());
     if (info.stopping != null || !identical(_actorInfo[id], info)) {
       return;
     }
@@ -768,10 +861,10 @@ class LocalActorSystem implements ActorSystem {
     try {
       info.inc = _newIncarnation(id, info.factory());
       await _startIncarnation(info, actorRef);
-    } catch (e) {
+    } catch (e, s) {
       // The replacement could not initialise; there is nothing left to run.
       if (identical(_actorInfo[id], info)) {
-        await _stopActor(actorRef);
+        await _stopActor(actorRef, reason: ErrorExit(e, s));
       }
       rethrow;
     }
@@ -826,8 +919,10 @@ class LocalActorSystem implements ActorSystem {
       }
     }
     info.children.clear();
-    _finishRetire(info.inc, actorRef.id);
-    _finishStop(actorRef, info);
+    final inc = info.inc;
+    _finishRetire(inc, actorRef.id);
+    _finishStop(actorRef, info, const KilledExit());
+    _signalLinks(inc, actorRef, const KilledExit());
   }
 
   /// Stops every child of [info], last-started first.
@@ -835,7 +930,8 @@ class LocalActorSystem implements ActorSystem {
     for (final childId in info.children.toList().reversed) {
       final child = _actors[childId];
       if (child != null) {
-        await _stopActor(child, requester: requester);
+        await _stopActor(child,
+            requester: requester, reason: const ShutdownExit());
       }
     }
     info.children.clear();
@@ -845,7 +941,11 @@ class LocalActorSystem implements ActorSystem {
   ///
   /// [stop] refuses work once shutdown has begun, but [shutdown] itself must
   /// still be able to tear every actor down, so it calls this directly.
-  Future<void> _stopActor(ActorRef actor, {_Incarnation? requester}) {
+  ///
+  /// [reason] is reported to watchers and linked actors, unless the actor has
+  /// a reason of its own: it failed, or it had to be killed.
+  Future<void> _stopActor(ActorRef actor,
+      {_Incarnation? requester, ExitReason reason = const NormalExit()}) {
     final actorRef = _actors[actor.id];
     if (actorRef is! LocalActorRef) {
       metrics.increment('actors.stop_failed');
@@ -855,14 +955,14 @@ class LocalActorSystem implements ActorSystem {
     }
     final info = _actorInfo[actor.id];
     if (info == null) {
-      _finishStop(actorRef, null);
+      _finishStop(actorRef, null, reason);
       return Future<void>.value();
     }
-    return info.stopping ??= _tearDown(actorRef, info, requester);
+    return info.stopping ??= _tearDown(actorRef, info, requester, reason);
   }
 
-  Future<void> _tearDown(
-      LocalActorRef actorRef, _ActorInfo info, _Incarnation? requester) async {
+  Future<void> _tearDown(LocalActorRef actorRef, _ActorInfo info,
+      _Incarnation? requester, ExitReason requested) async {
     info.started = false;
     final inc = info.inc;
     inc.retiring = true;
@@ -875,18 +975,21 @@ class LocalActorSystem implements ActorSystem {
     if (info.children.isNotEmpty) {
       await _stopChildren(info, requester);
     }
-    _finishRetire(info.inc, actorRef.id);
-    _finishStop(actorRef, info);
+    final reason = inc.exitReason ?? requested;
+    _finishRetire(inc, actorRef.id);
+    _finishStop(actorRef, info, reason);
+    _signalLinks(inc, actorRef, reason);
   }
 
   /// Unregisters the actor. Idempotent, because a kill can overtake a
   /// graceful stop that is still waiting.
-  void _finishStop(LocalActorRef actorRef, _ActorInfo? info) {
+  void _finishStop(
+      LocalActorRef actorRef, _ActorInfo? info, ExitReason reason) {
     if (!identical(_actors[actorRef.id], actorRef)) {
       return;
     }
     _eventBus.cleanup(actorRef);
-    actorRef.stop();
+    actorRef.stop(reason);
     _actors.remove(actorRef.id);
     _actorInfo.remove(actorRef.id);
     final parentId = info?.parentId;
@@ -923,7 +1026,8 @@ class LocalActorSystem implements ActorSystem {
     for (final actorRef in List<LocalActorRef>.of(_actors.values).reversed) {
       // A parent's teardown may already have taken this actor with it.
       if (identical(_actors[actorRef.id], actorRef)) {
-        await _stopActor(actorRef, requester: requester);
+        await _stopActor(actorRef,
+            requester: requester, reason: const ShutdownExit());
       }
     }
     _actors.clear();
@@ -957,6 +1061,15 @@ class _ActorContext implements ActorContext {
   void watch(ActorRef actor) {
     actor.watch(self);
   }
+
+  @override
+  bool trapExits = false;
+
+  @override
+  void link(ActorRef other) => system._link(this, other);
+
+  @override
+  void unlink(ActorRef other) => system._unlink(this, other);
 
   @override
   Future<void> restart(ActorRef child) {
