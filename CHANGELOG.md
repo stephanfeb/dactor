@@ -129,6 +129,33 @@ Phase 1, fourth part: lints.
   closure, or itself, in a message). This repository's own code has no
   findings. See `packages/dactor_lints/README.md` for how to enable it.
 
+Phase 2: behaviours and typed protocols. Everything here is an addition;
+existing actors and `ActorRef` are unchanged.
+
+- **`TypedRef<M>`**, from `ref.typed<M>()`: a compile-time view of an
+  `ActorRef` that only accepts `M`. `Call<R>` marks a message as a request,
+  and `typedRef.call(request)` returns a `Future<R>`. A handler that throws
+  fails the call with `CallException` instead of leaving it to time out.
+- **`GenServer<S, M>`**: `init`, `handleCall` (`Reply`, `NoReply`,
+  `StopReply`), `handleCast`, `handleInfo`, `terminate`. The state is a value
+  the handlers return.
+- **`GenStatem<S, D, M>`**: `onEvent` answers with `next`, `keep`, `postpone`
+  or `halt`; `onEnter`; state timeouts with `onTimeout`; postponed events are
+  replayed in order when the state changes.
+- **`Application` and `ApplicationController`**: named supervision trees
+  started in dependency order and stopped in reverse.
+- **Selective receive**: `context.receive<T>(where:, timeout:)` inside a
+  handler. `ActorContext` gained this member, which breaks classes that
+  implement `ActorContext` themselves.
+- **`LocalActorSystem.sys`**: `getState`, `replaceState`, `suspend`,
+  `resume`, `trace`, `statistics`, and `upgrade`, which swaps an actor's code
+  and passes the old state to the new behaviour's `codeChange`.
+- New metric `actors.upgraded`. `Mailbox` gained `length`, `dequeueSystem`
+  and `takeFirstWhere`.
+- Examples: `example/gen_server_example.dart`,
+  `example/gen_statem_example.dart`. The README's first example is now the
+  `GenServer` counter.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

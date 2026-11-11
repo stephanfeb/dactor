@@ -13,6 +13,7 @@ Dactor provides a robust actor system for building concurrent, fault-tolerant, a
 - 🎯 **Pure Actor Model**: Type-safe message passing with actor isolation
 - 🔄 **Reliable Ask Pattern**: Request-response with configurable retries and exponential backoff  
 - 🛡️ **Fault Tolerance**: Supervision trees with customizable recovery strategies
+- 🧩 **Typed Behaviours**: `GenServer`, `GenStatem` and `TypedRef<M>` with compile-time checked messages
 - 📡 **Event Bus**: Publish-subscribe messaging for event-driven architectures
 - ⏰ **Actor Timers**: Schedule messages with single-shot, fixed-delay, and fixed-rate timers
 - ⚡ **High Performance**: >29K messages/sec throughput, <1ms latency
@@ -33,55 +34,62 @@ dependencies:
 
 ### Basic Example
 
+A counter, written as a `GenServer`: the state is a value, the messages are a sealed class, and the compiler checks both.
+
 ```dart
 import 'package:dactor/dactor.dart';
 
-// Define an actor
-class CounterActor extends Actor {
-  int _count = 0;
+// The messages the counter accepts. A message that mixes in Call<R> expects
+// a reply of type R.
+sealed class CounterMsg {}
+
+final class Increment extends CounterMsg {}
+
+final class Get extends CounterMsg with Call<int> {}
+
+// A server whose state is an int and whose messages are CounterMsg.
+class Counter extends GenServer<int, CounterMsg> {
+  @override
+  int init() => 0;
+
+  // Messages that expect no reply: return the new state.
+  @override
+  int handleCast(CounterMsg message, int state) => switch (message) {
+        Increment() => state + 1,
+        Get() => state,
+      };
+
+  // Requests: reply and return the new state.
+  @override
+  CallResult<int> handleCall(CounterMsg request, int state, From from) =>
+      switch (request) {
+        Get() => request.reply(state, state),
+        Increment() => NoReply(state),
+      };
 
   @override
-  Future<void> onMessage(dynamic message) async {
-    // onMessage receives the payload of the LocalMessage, not the envelope.
-    // Reply to the sender through the actor's context.
-    switch (message) {
-      case 'increment':
-        _count++;
-        print('Count: $_count');
-        context.sender?.tell(LocalMessage(payload: _count));
-      case 'get':
-        context.sender?.tell(LocalMessage(payload: _count));
-    }
-  }
-
-  @override
-  void preStart() => print('Counter actor started');
-
-  @override
-  void postStop() => print('Counter actor stopped');
+  void terminate(int state) => print('Counter stopped at $state');
 }
 
 void main() async {
-  // Create actor system
-  final system = ActorSystem.create();
-  
-  // Spawn an actor
-  final counter = await system.spawn('counter', () => CounterActor());
-  
-  // Send messages (fire-and-forget)
-  counter.tell(LocalMessage(payload: 'increment'));
-  counter.tell(LocalMessage(payload: 'increment'));
-  
-  // Ask pattern (request-response): completes with the reply's payload
-  final count = await counter.ask<int>(
-    LocalMessage(payload: 'get'),
-    Duration(seconds: 1),
-  );
+  final system = LocalActorSystem();
+
+  // typed() restricts the reference to the counter's messages.
+  final TypedRef<CounterMsg> counter =
+      (await system.spawn('counter', () => Counter())).typed();
+
+  counter.tell(Increment());
+  counter.tell(Increment());
+  // counter.tell('increment');  // does not compile
+
+  final int count = await counter.call(Get());
   print('Current count: $count');
-  
+
   await system.shutdown();
 }
 ```
+
+The same file is in `example/gen_server_example.dart`. A `GenServer` is an ordinary actor underneath. You can also extend `Actor` directly and handle whatever arrives in `onMessage(dynamic message)`; the rest of this document mostly does, and the two styles mix freely in one system.
 
 ## 📚 Core Concepts
 
@@ -374,6 +382,112 @@ Actors in one isolate share a heap, so nothing stops a message from carrying mut
 - `dactor_captured_actor_state`: an actor sends a closure, or itself, in a message.
 
 Limits: a handler in a synchronous loop cannot be interrupted, and work an actor starts through `Zone.root.run` is outside its zone.
+
+## 🧩 Behaviours and Typed Messages
+
+### Typed references
+
+`ref.typed<M>()` gives a `TypedRef<M>`: the same reference, restricted at compile time to messages of type `M`. It costs nothing at run time, and `typedRef.untyped` gives the plain `ActorRef` back. A message class that mixes in `Call<R>` is a request, and `typedRef.call(request)` returns a `Future<R>`.
+
+`call` fails with `TimeoutException` if no reply comes, with `CallException` if the handler threw, and with `StateError` if the actor is dead. It does not retry.
+
+The type is a promise made where the reference is created. Nothing checks that the actor behind it understands `M`.
+
+### GenServer
+
+`GenServer<S, M>` holds a state of type `S` and accepts messages of type `M`.
+
+| Override | Called for | Returns |
+|----------|------------|---------|
+| `init()` | start, in `preStart` | the first state |
+| `handleCall(request, state, from)` | an `M` that mixes in `Call` | `request.reply(value, newState)`, `NoReply(newState)` or `StopReply(value, newState)` |
+| `handleCast(message, state)` | any other `M` | the new state |
+| `handleInfo(message, state)` | anything that is not an `M`, such as `Terminated` or `ExitSignal` | the new state |
+| `terminate(state)` | `postStop` | |
+| `codeChange(oldVersion, oldState)` | start after `sys.upgrade` | the first state |
+
+All of them may be asynchronous except `terminate`. `request.reply` checks the type of the reply against the request. After `NoReply`, answer later with `request.replyTo(from, value)`. A handler that throws changes nothing: the state is whatever the last handler returned.
+
+### GenStatem
+
+`GenStatem<S, D, M>` is a state machine with a state `S`, data `D` and events `M`. `onEvent(state, event, data)` answers every event with a transition:
+
+| Transition | Effect |
+|------------|--------|
+| `next(state, data:, reply:, timeout:)` | Move to another state. Runs `onEnter`, cancels the old state timeout, replays postponed events. |
+| `keep(data:, reply:, timeout:)` | Stay. |
+| `postpone()` | Stay, and handle this event again after the next change of state. |
+| `halt(reply:)` | Stop the machine. |
+
+A `timeout:` starts a state timeout. If the machine is still in that state when it runs out, `onTimeout(state, data)` is called. Override `stateTimeout(state)` to give a state a default. Messages that are not an `M` go to `onInfo`.
+
+`example/gen_statem_example.dart` is a code lock that uses a state timeout and a postponed event.
+
+### Selective receive
+
+Inside a handler, `await context.receive<T>(where: ..., timeout: ...)` waits for one particular message and leaves the others in the mailbox, in order:
+
+```dart
+case StartTransfer(:final id):
+  bank.tell(LocalMessage(payload: Debit(id)), sender: context.self);
+  final ack = await context.receive<DebitAck>(
+      where: (a) => a.id == id, timeout: Duration(seconds: 5));
+```
+
+The actor handles nothing else while it waits, and every call scans the mailbox. Use it for short request-and-acknowledge exchanges, not as the normal way to receive.
+
+### Inspecting and changing running actors
+
+`system.sys` (on `LocalActorSystem`) works on any running actor:
+
+```dart
+final sys = system.sys;
+await sys.getState(ref);                  // a behaviour's state, or the Actor object
+await sys.replaceState(ref, (s) => 0);    // behaviours only
+sys.suspend(ref);                         // user messages queue up
+sys.resume(ref);
+sys.trace(ref, true);                     // log every message received, at debug level
+sys.statistics(ref);                      // processed, mailbox size, restarts, suspended, busy
+await sys.upgrade(ref, () => CounterV2()); // new code, same ref, mailbox and state
+```
+
+`getState` and `replaceState` are delivered through the actor's mailbox ahead of user messages, so they run between handlers and are answered even while the actor is suspended.
+
+`upgrade` restarts the actor from the new factory. If the old and the new actor are both behaviours, the new one starts from `codeChange(oldVersion, oldState)` instead of `init()`; raise `version` when the shape of the state changes. Children are stopped as in any restart.
+
+### Applications
+
+An `Application` is a named supervision tree with dependencies. `ApplicationController` starts dependencies first, starts each application once, and stops in reverse order:
+
+```dart
+class Database extends Application {
+  @override
+  String get name => 'database';
+
+  @override
+  Future<ActorRef> start(ActorSystem system) =>
+      system.spawn('database', () => DatabaseSupervisor());
+}
+
+class Web extends Application {
+  @override
+  String get name => 'web';
+
+  @override
+  List<Application> get dependencies => [Database()];
+
+  @override
+  Future<ActorRef> start(ActorSystem system) =>
+      system.spawn('web', () => WebSupervisor());
+}
+
+final apps = ApplicationController(system);
+await apps.start(Web());      // starts database, then web
+await apps.stop('database');  // stops web, then database
+await apps.stopAll();
+```
+
+If an application fails to start, the ones that call had started are stopped again.
 
 ## ⚡ Actor Pooling for Scalability
 

@@ -59,6 +59,17 @@ abstract class ActorContext {
   bool get trapExits;
   set trapExits(bool value);
 
+  /// Waits, inside a handler, for the next message of type [T] that passes
+  /// [where], and returns it. Other messages stay in the mailbox, in order,
+  /// and are handled as usual once the current handler has returned.
+  ///
+  /// Fails with a [TimeoutException] if nothing matches within [timeout].
+  ///
+  /// Use it sparingly. Every call scans the whole mailbox, so on an actor
+  /// with a backlog it is slow, and an actor waiting here handles nothing
+  /// else.
+  Future<T> receive<T>({bool Function(T message)? where, Duration? timeout});
+
   /// Restarts [child] in place.
   ///
   /// The child's [ActorRef], mailbox (including pending messages), watchers

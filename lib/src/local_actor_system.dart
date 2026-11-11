@@ -17,6 +17,7 @@ import 'package:dactor/src/logging/logging.dart';
 import 'package:dactor/src/ask_config.dart';
 import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor/src/supervision.dart';
+import 'package:dactor/src/sys.dart';
 import 'package:dactor/src/routing/pool.dart';
 import 'package:dactor/src/routing/router_actor.dart';
 import 'package:dactor/src/event_bus.dart';
@@ -48,6 +49,27 @@ final class _ChildExited extends _SupervisionSignal {
   final LocalActorRef child;
   final ExitReason reason;
   _ChildExited(this.child, this.reason);
+}
+
+/// A request from [Sys], delivered through the actor's mailbox ahead of its
+/// user messages and never passed to `onMessage`.
+sealed class _SysRequest {
+  /// Created in the caller's zone, so the caller hears about errors.
+  final done = Completer<Object?>();
+}
+
+final class _GetState extends _SysRequest {}
+
+final class _ReplaceState extends _SysRequest {
+  final Object? Function(Object? current) update;
+  _ReplaceState(this.update);
+}
+
+/// A handler waiting in [ActorContext.receive].
+class _PendingReceive {
+  final bool Function(Object? payload) test;
+  final Completer<Object?> done;
+  _PendingReceive(this.test, this.done);
 }
 
 /// One run of an actor: the [Actor] instance a factory produced, and the zone
@@ -105,7 +127,7 @@ class _Incarnation extends TombstoneZone {
 /// incarnation, which a restart replaces.
 class _ActorInfo {
   _Incarnation inc;
-  final Actor Function() factory;
+  Actor Function() factory;
   final SupervisionStrategy? supervision;
   final Mailbox mailbox;
 
@@ -130,6 +152,18 @@ class _ActorInfo {
   /// Ids of the actors this one supervises, in start order. Stopping or
   /// restarting this actor stops them first, last-started first.
   final children = <String>{};
+
+  /// Set by [Sys.suspend]: user messages wait, system messages still run.
+  bool sysSuspended = false;
+
+  /// Set by [Sys.trace].
+  bool traced = false;
+
+  int processed = 0;
+  int restarts = 0;
+
+  /// A handler of the current incarnation waiting in `receive`.
+  _PendingReceive? pendingReceive;
 
   /// Restart budget of a top-level actor spawned with a strategy. Supervised
   /// actors draw on their supervisor's budget instead.
@@ -214,6 +248,9 @@ class LocalActorSystem implements ActorSystem {
     _eventBus = EventBus();
     _messagePump();
   }
+
+  /// Inspection and control of running actors.
+  late final Sys sys = _Sys(this);
 
   @override
   EventBus get eventBus => _eventBus;
@@ -416,10 +453,10 @@ class LocalActorSystem implements ActorSystem {
 
   /// Wires a fresh context into the current incarnation, runs its `preStart`
   /// inside its zone, and only then opens the mailbox for processing.
-  Future<void> _startIncarnation(
-      _ActorInfo info, LocalActorRef actorRef) async {
+  Future<void> _startIncarnation(_ActorInfo info, LocalActorRef actorRef,
+      {BehaviourHandoff? handoff}) async {
     final inc = info.inc;
-    inc.actor.context = _ActorContext(actorRef, this);
+    inc.actor.context = _ActorContext(actorRef, this).._handoff = handoff;
     inc.busy = true;
     try {
       final starting = _inActor<void>(inc, () => inc.actor.preStart());
@@ -480,6 +517,10 @@ class LocalActorSystem implements ActorSystem {
     }
     inc.kill();
     inc.abandon?.call();
+    final info = _actorInfo[id];
+    if (info != null && identical(info.inc, inc)) {
+      info.pendingReceive = null;
+    }
   }
 
   /// Tells every actor linked with [inc] that it has ended, and dissolves
@@ -605,10 +646,12 @@ class LocalActorSystem implements ActorSystem {
         continue;
       }
 
-      final message = mailbox.dequeue();
+      final message =
+          info.sysSuspended ? mailbox.dequeueSystem() : mailbox.dequeue();
       if (message == null) {
         continue;
       }
+      info.processed++;
       metrics.increment('messages.processed');
       final actorRef = _actors[mailbox.actorId]!;
 
@@ -672,6 +715,8 @@ class LocalActorSystem implements ActorSystem {
       stopwatch.stop();
       metrics.timing('messages.processing_time', stopwatch.elapsed);
       context.sender = null;
+      // A receive the handler did not wait for ends with the handler.
+      if (identical(info.inc, inc)) info.pendingReceive = null;
       _processingActors.remove(mailbox.actorId);
       inc.markIdle();
       if (!mailbox.isEmpty && !mailbox.isDisposed) {
@@ -695,15 +740,24 @@ class LocalActorSystem implements ActorSystem {
     } else {
       payload = message;
     }
+    if (info.traced &&
+        payload is! _SupervisionSignal &&
+        payload is! _SysRequest) {
+      logger.record(
+          LogRecord(LogLevel.debug, 'received $payload', actor: actorRef));
+    }
 
     // The outcome is observed from inside the actor's zone, because a
     // listener outside it would never be told about an error, and then
     // carried back to the system zone, where the bookkeeping lives.
     try {
       inc.run(() {
-        final Future<void> handling = payload is _SupervisionSignal
-            ? _superviseSignal(actor as Supervisor, payload)
-            : actor.onMessage(payload);
+        final Future<void> handling = switch (payload) {
+          _SupervisionSignal() =>
+            _superviseSignal(actor as Supervisor, payload),
+          _SysRequest() => _answerSys(actor, payload),
+          _ => actor.onMessage(payload),
+        };
         handling.then((_) => _systemZone.run(finish),
             onError: (Object e, StackTrace s) =>
                 _systemZone.run(() => failed(e, s)));
@@ -713,8 +767,75 @@ class LocalActorSystem implements ActorSystem {
     }
   }
 
+  /// Answers a [_SysRequest] as one of the actor's own messages.
+  Future<void> _answerSys(Object actor, _SysRequest request) async {
+    try {
+      switch (request) {
+        case _GetState():
+          request.done.complete(
+              actor is StatefulBehaviour ? actor.behaviourState : actor);
+        case _ReplaceState():
+          if (actor is! StatefulBehaviour) {
+            throw UnsupportedError(
+                '${actor.runtimeType} does not keep its state as a value');
+          }
+          actor.behaviourState = request.update(actor.behaviourState);
+          request.done.complete(actor.behaviourState);
+      }
+    } catch (e, s) {
+      request.done.completeError(e, s);
+    }
+  }
+
+  /// Gives a handler waiting in `receive` the first queued message it
+  /// accepts. Returns whether it got one.
+  bool _feedReceive(_ActorInfo info) {
+    final pending = info.pendingReceive;
+    if (pending == null) return false;
+    final match = info.mailbox.takeFirstWhere((message) =>
+        pending.test(message is LocalMessage ? message.payload : message));
+    if (match == null) return false;
+    info.pendingReceive = null;
+    pending.done.complete(match is LocalMessage ? match.payload : match);
+    return true;
+  }
+
+  Future<T> _receive<T>(_ActorContext context, bool Function(T message)? where,
+      Duration? timeout) {
+    // Created here, in the actor's zone: its timeout dies with the actor.
+    final done = Completer<Object?>();
+    final info = _actorInfo[context.self.id];
+    if (info == null ||
+        !identical(info.inc.actor.context, context) ||
+        !info.inc.busy) {
+      throw StateError('receive can only be called from inside a handler');
+    }
+    if (info.pendingReceive != null) {
+      throw StateError('this handler is already waiting in receive');
+    }
+    final pending = _PendingReceive(
+        (payload) => payload is T && (where == null || where(payload)), done);
+    info.pendingReceive = pending;
+    _sys(() => _feedReceive(info));
+    var waiting = done.future.then((payload) => payload as T);
+    if (timeout != null) {
+      waiting = waiting.timeout(timeout, onTimeout: () {
+        if (identical(info.pendingReceive, pending)) {
+          info.pendingReceive = null;
+        }
+        throw TimeoutException('No matching message arrived', timeout);
+      });
+    }
+    return waiting;
+  }
+
   void scheduleMailbox(Mailbox mailbox) {
     if (_processingActors.contains(mailbox.actorId)) {
+      // Busy, but perhaps busy waiting for exactly this message.
+      final info = _actorInfo[mailbox.actorId];
+      if (info != null && info.pendingReceive != null) {
+        _sys(() => _feedReceive(info));
+      }
       return;
     }
     if (_scheduledMailboxes.add(mailbox)) {
@@ -905,7 +1026,11 @@ class LocalActorSystem implements ActorSystem {
   /// Children do not survive: they are stopped before the old incarnation's
   /// `postStop`, and the new incarnation starts with none. A supervisor that
   /// wants its children back creates them in `preStart`.
-  Future<void> _restartActor(String id, {_Incarnation? requester}) {
+  ///
+  /// With [upgradeTo], later incarnations come from that factory, and the
+  /// first of them is handed the old incarnation's state.
+  Future<void> _restartActor(String id,
+      {_Incarnation? requester, Actor Function()? upgradeTo}) {
     final actorRef = _actors[id];
     final info = _actorInfo[id];
     if (_isShutdown ||
@@ -914,14 +1039,20 @@ class LocalActorSystem implements ActorSystem {
         info.stopping != null) {
       return Future<void>.value();
     }
-    return info.restarting ??= _doRestart(actorRef, info, requester)
+    if (upgradeTo != null && info.restarting != null) {
+      throw StateError('$id is being restarted; try the upgrade again');
+    }
+    return info.restarting ??= _doRestart(actorRef, info, requester, upgradeTo)
         .whenComplete(() => info.restarting = null);
   }
 
-  Future<void> _doRestart(
-      LocalActorRef actorRef, _ActorInfo info, _Incarnation? requester) async {
+  Future<void> _doRestart(LocalActorRef actorRef, _ActorInfo info,
+      _Incarnation? requester, Actor Function()? upgradeTo) async {
     final id = actorRef.id;
-    metrics.increment('actors.restarted', tags: {'actorId': id});
+    metrics.increment(
+        upgradeTo == null ? 'actors.restarted' : 'actors.upgraded',
+        tags: {'actorId': id});
+    info.restarts++;
 
     info.started = false;
     final old = info.inc;
@@ -932,6 +1063,16 @@ class LocalActorSystem implements ActorSystem {
     if (info.children.isNotEmpty) {
       await _stopChildren(info, requester);
     }
+    // The old incarnation is idle now, or was given up on: its state is as
+    // settled as it will get.
+    BehaviourHandoff? handoff;
+    final Object oldActor = old.actor;
+    if (upgradeTo != null && oldActor is StatefulBehaviour && old.preStarted) {
+      handoff = (
+        version: oldActor.behaviourVersion,
+        state: oldActor.behaviourState,
+      );
+    }
     _finishRetire(old, id);
     _signalLinks(old, actorRef, old.exitReason ?? const ShutdownExit());
     if (info.stopping != null || !identical(_actorInfo[id], info)) {
@@ -939,8 +1080,9 @@ class LocalActorSystem implements ActorSystem {
     }
 
     try {
+      if (upgradeTo != null) info.factory = upgradeTo;
       info.inc = _newIncarnation(id, info.factory());
-      await _startIncarnation(info, actorRef);
+      await _startIncarnation(info, actorRef, handoff: handoff);
     } catch (e, s) {
       // The replacement could not initialise; there is nothing left to run.
       if (identical(_actorInfo[id], info)) {
@@ -1141,7 +1283,74 @@ class LocalActorSystem implements ActorSystem {
   }
 }
 
-class _ActorContext implements ActorContext {
+class _Sys implements Sys {
+  final LocalActorSystem _system;
+  _Sys(this._system);
+
+  _ActorInfo _info(ActorRef actor) {
+    final info = _system._actorInfo[actor.id];
+    if (info == null || !identical(_system._actors[actor.id], actor)) {
+      throw StateError('Actor ${actor.id} is not alive');
+    }
+    return info;
+  }
+
+  Future<Object?> _ask(ActorRef actor, _SysRequest request, Duration? timeout) {
+    _info(actor).mailbox.enqueueSystem(LocalMessage(payload: request));
+    return request.done.future.timeout(timeout ?? _system._stopTimeout,
+        onTimeout: () {
+      throw TimeoutException(
+          'Actor ${actor.id} did not answer the sys request', timeout);
+    });
+  }
+
+  @override
+  Future<Object?> getState(ActorRef actor, {Duration? timeout}) =>
+      _ask(actor, _GetState(), timeout);
+
+  @override
+  Future<Object?> replaceState(
+          ActorRef actor, Object? Function(Object? current) update,
+          {Duration? timeout}) =>
+      _ask(actor, _ReplaceState(update), timeout);
+
+  @override
+  void suspend(ActorRef actor) => _info(actor).sysSuspended = true;
+
+  @override
+  void resume(ActorRef actor) {
+    final info = _info(actor);
+    info.sysSuspended = false;
+    if (!info.mailbox.isEmpty) {
+      _system.scheduleMailbox(info.mailbox);
+    }
+  }
+
+  @override
+  void trace(ActorRef actor, bool enabled) => _info(actor).traced = enabled;
+
+  @override
+  ActorStatistics statistics(ActorRef actor) {
+    final info = _info(actor);
+    return ActorStatistics(
+      messagesProcessed: info.processed,
+      mailboxSize: info.mailbox.length,
+      restarts: info.restarts,
+      suspended: info.sysSuspended,
+      busy: info.inc.busy,
+    );
+  }
+
+  @override
+  Future<void> upgrade(ActorRef actor, Actor Function() newFactory) {
+    _info(actor);
+    final requester = _system._caller;
+    return _system._sysAsync(() => _system._restartActor(actor.id,
+        requester: requester, upgradeTo: newFactory));
+  }
+}
+
+class _ActorContext implements ActorContext, BehaviourContext {
   @override
   final ActorRef self;
   @override
@@ -1168,6 +1377,19 @@ class _ActorContext implements ActorContext {
 
   @override
   bool trapExits = false;
+
+  BehaviourHandoff? _handoff;
+
+  @override
+  BehaviourHandoff? takeHandoff() {
+    final handoff = _handoff;
+    _handoff = null;
+    return handoff;
+  }
+
+  @override
+  Future<T> receive<T>({bool Function(T message)? where, Duration? timeout}) =>
+      system._receive<T>(this, where, timeout);
 
   @override
   void link(ActorRef other) => system._link(this, other);

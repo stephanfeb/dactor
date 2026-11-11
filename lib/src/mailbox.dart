@@ -52,6 +52,29 @@ class Mailbox {
     return null;
   }
 
+  /// The next system message, leaving user messages where they are.
+  Message? dequeueSystem() {
+    final system = _system;
+    return system != null && system.isNotEmpty ? system.removeFirst() : null;
+  }
+
+  /// Removes and returns the first user message that passes [test], leaving
+  /// the others in order.
+  Message? takeFirstWhere(bool Function(Message message) test) {
+    Message? found;
+    _queue.removeWhere((message) {
+      if (found == null && test(message)) {
+        found = message;
+        return true;
+      }
+      return false;
+    });
+    return found;
+  }
+
+  /// The number of user messages waiting.
+  int get length => _queue.length;
+
   bool get isEmpty => _queue.isEmpty && (_system?.isEmpty ?? true);
 
   bool get isDisposed => _isDisposed;
