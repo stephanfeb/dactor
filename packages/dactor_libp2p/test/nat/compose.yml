@@ -1,0 +1,38 @@
+# Layered by run.sh over go-ricochet's mailbox example
+# (examples/mailbox/docker/compose.yml): two dactor nodes, each behind its
+# own NAT router, with the Ricochet server as their relay.
+#
+#   internet 11.70.0.0/16:   server 11.70.3.10, nat-a 11.70.1.10, nat-b 11.70.1.20
+#   home-a   192.168.1.0/24: nat-a, dialer
+#   home-b   192.168.2.0/24: nat-b, listener
+
+x-node: &node
+  image: dactor-nat-node
+  build:
+    context: ${DACTOR_DIR}
+    dockerfile: packages/dactor_libp2p/test/nat/node.Dockerfile
+  cap_add: [NET_ADMIN]
+  init: true
+
+services:
+  listener:
+    <<: *node
+    environment:
+      PUBLIC_NET: 11.70.0.0/16
+      NAT_GATEWAY: 192.168.2.10
+      LOG: ${LOG:-}
+      PUNCH: ${PUNCH:-1}
+    volumes:
+      - shared:/shared:ro
+    networks: [home-b]
+    command: listen
+
+  dialer:
+    <<: *node
+    environment:
+      PUBLIC_NET: 11.70.0.0/16
+      NAT_GATEWAY: 192.168.1.10
+      LOG: ${LOG:-}
+    volumes:
+      - shared:/shared:ro
+    networks: [home-a]

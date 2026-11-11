@@ -27,6 +27,13 @@ import 'package:dart_libp2p/dart_libp2p.dart';
 /// either breaks, the node is reported down and the next send opens a new
 /// stream. A connection that goes silent is noticed through the muxer's
 /// keep-alive, if the host's muxer has one.
+///
+/// When a direct connection to a node appears while frames to it go over a
+/// relay (a hole punch succeeded, or the node was dialled directly), the
+/// transport moves them to a stream on the direct connection. It ends the
+/// old stream with a marker (an empty frame), and the receiving side reads
+/// a node's newer stream only after the older one has ended with it, so
+/// frames keep their order and the node is not reported down.
 class Libp2pTransport implements Transport {
   /// The protocol id the transport registers on the host.
   static const protocol = '/dactor/remote/1.0.0';
@@ -49,7 +56,7 @@ class Libp2pTransport implements Transport {
 
   TransportListener? _listener;
   final _outbound = <String, _Outbound>{};
-  final _inbound = <String, Set<P2PStream>>{};
+  final _inbound = <String, List<_Inbound>>{};
   final _up = <String>{};
   late final Notifiee _notifiee;
   bool _closed = false;
@@ -61,7 +68,12 @@ class Libp2pTransport implements Transport {
       : _ownsHost = closeHost,
         localNode = host.id.toBase58() {
     host.setStreamHandler(protocol, _accept);
-    _notifiee = NotifyBundle(disconnectedF: (network, conn) {
+    _notifiee = NotifyBundle(connectedF: (network, conn, {dialLatency}) {
+      if (!_isRelayed(conn)) {
+        final node = conn.remotePeer.toBase58();
+        scheduleMicrotask(() => _moveOffRelay(node));
+      }
+    }, disconnectedF: (network, conn) {
       final peer = conn.remotePeer;
       // A peer can have several connections (a relayed one and a direct
       // one); only the last one going means the node is gone.
@@ -108,6 +120,38 @@ class Libp2pTransport implements Transport {
     return id;
   }
 
+  /// The remote address of the connection that frames to [node] go over,
+  /// or null when none is open. A relayed one contains `/p2p-circuit`.
+  String? routeTo(String node) =>
+      _outbound[node]?.stream?.conn.remoteMultiaddr.toString();
+
+  static bool _isRelayed(Conn conn) =>
+      conn.remoteMultiaddr.toString().contains('/p2p-circuit');
+
+  /// Moves frames to [node] onto a direct connection, if they go over a
+  /// relay and libp2p now opens streams to it directly.
+  void _moveOffRelay(String node) {
+    final out = _outbound[node];
+    final current = out?.stream;
+    if (_closed || out == null || current == null || out.moving) return;
+    if (!_isRelayed(current.conn)) return;
+    out.moving = true;
+    host
+        .newStream(PeerId.fromString(node), const [protocol], Context())
+        .timeout(dialTimeout)
+        .then((stream) {
+      if (_closed ||
+          !identical(_outbound[node], out) ||
+          _isRelayed(stream.conn)) {
+        out.moving = false;
+        unawaited(stream.reset().catchError((_) {}));
+        return;
+      }
+      unawaited(_drain(stream, node));
+      out.moveTo(stream);
+    }, onError: (Object _) => out.moving = false);
+  }
+
   /// [addAddress] for several addresses; returns the nodes' names.
   Future<List<String>> addAddresses(Iterable<String> addresses,
           {Duration ttl = const Duration(hours: 1)}) async =>
@@ -118,7 +162,8 @@ class Libp2pTransport implements Transport {
 
   @override
   void send(String node, Uint8List frame) {
-    if (_closed) return;
+    // An empty frame is the handover marker; dactor_remote never sends one.
+    if (_closed || frame.isEmpty) return;
     (_outbound[node] ??= _open(node)).add(_framed(frame));
   }
 
@@ -166,22 +211,38 @@ class Libp2pTransport implements Transport {
     }
     // The security handshake has authenticated the peer; no hello needed.
     final node = remotePeer.toBase58();
-    (_inbound[node] ??= {}).add(stream);
+    final entry = _Inbound(stream);
+    final queue = _inbound[node] ??= [];
+    final before = queue.lastOrNull;
+    queue.add(entry);
     _nodeUp(node);
+    // Frames move to a new stream only after the old one ended with the
+    // handover marker; until then, this stream waits unread.
+    if (before != null && !await before.handedOver.future) return;
     final reader = _FrameReader();
+    var handedOver = false;
     try {
+      read:
       while (!_closed) {
         final chunk = await stream.read();
         if (chunk.isEmpty) break;
         for (final frame in reader.add(chunk)) {
-          if (_closed || !(_inbound[node]?.contains(stream) ?? false)) return;
+          if (_closed || !(_inbound[node]?.contains(entry) ?? false)) return;
+          if (frame.isEmpty) {
+            handedOver = true;
+            break read;
+          }
           _listener?.onFrame(node, frame);
         }
       }
     } catch (_) {
       // A broken stream or an oversized frame: the node is down.
     }
-    if (_inbound[node]?.remove(stream) ?? false) {
+    if (!(_inbound[node]?.remove(entry) ?? false)) return;
+    entry.handedOver.complete(handedOver);
+    if (handedOver) {
+      unawaited(stream.close().catchError((_) {}));
+    } else {
       unawaited(stream.reset().catchError((_) {}));
       _down(node);
     }
@@ -195,9 +256,14 @@ class Libp2pTransport implements Transport {
   void _down(String node) {
     if (_closed) return;
     final out = _outbound.remove(node);
+    final inbound = _inbound.remove(node) ?? const <_Inbound>[];
+    for (final entry in inbound) {
+      if (!entry.handedOver.isCompleted) entry.handedOver.complete(false);
+    }
     final streams = [
       if (out?.stream != null) out!.stream!,
-      ...?_inbound.remove(node),
+      if (out?.next != null) out!.next!,
+      for (final entry in inbound) entry.stream,
     ];
     for (final stream in streams) {
       unawaited(stream.reset().catchError((_) {}));
@@ -216,10 +282,18 @@ class Libp2pTransport implements Transport {
     host.removeStreamHandler(protocol);
     host.network.stopNotify(_notifiee);
     final streams = [
-      for (final out in _outbound.values)
+      for (final out in _outbound.values) ...[
         if (out.stream != null) out.stream!,
-      for (final set in _inbound.values) ...set,
+        if (out.next != null) out.next!,
+      ],
+      for (final queue in _inbound.values)
+        for (final entry in queue) entry.stream,
     ];
+    for (final queue in _inbound.values) {
+      for (final entry in queue) {
+        if (!entry.handedOver.isCompleted) entry.handedOver.complete(false);
+      }
+    }
     _outbound.clear();
     _inbound.clear();
     _up.clear();
@@ -237,14 +311,32 @@ class Libp2pTransport implements Transport {
   }
 }
 
+/// A stream a node accepted, and whether it ended by handing over to the
+/// node's next stream (true) or otherwise (false).
+class _Inbound {
+  final P2PStream stream;
+  final handedOver = Completer<bool>();
+  _Inbound(this.stream);
+}
+
 /// The stream a node writes to another on, and the frames waiting for it.
 ///
 /// Writes are chained so that they reach the stream in order; frames that
 /// queue up while one is being written go out together in the next.
 class _Outbound {
+  /// The handover marker: a frame of length zero.
+  static final _marker = Uint8List(4);
+
   final Libp2pTransport _transport;
   final String _node;
   P2PStream? stream;
+
+  /// A stream to move to, at the next frame boundary.
+  P2PStream? next;
+
+  /// A move is being prepared or is waiting in [next].
+  bool moving = false;
+
   final _waiting = BytesBuilder(copy: false);
   bool _writing = false;
 
@@ -260,13 +352,28 @@ class _Outbound {
     if (_waiting.isNotEmpty) _flush();
   }
 
+  void moveTo(P2PStream s) {
+    next = s;
+    if (!_writing) _flush();
+  }
+
   Future<void> _flush() async {
     _writing = true;
-    final s = stream!;
     try {
-      while (_waiting.isNotEmpty) {
-        await s.write(_waiting.takeBytes());
-        if (!identical(stream, s)) return;
+      while (true) {
+        final to = next;
+        if (to != null) {
+          // Everything written so far is on the old stream; the marker
+          // tells the other side to continue with the next one.
+          await stream!.write(_marker);
+          final old = stream!;
+          stream = to;
+          next = null;
+          moving = false;
+          unawaited(old.closeWrite().catchError((_) {}));
+        }
+        if (_waiting.isEmpty) break;
+        await stream!.write(_waiting.takeBytes());
       }
     } catch (_) {
       if (identical(_transport._outbound[_node], this)) {

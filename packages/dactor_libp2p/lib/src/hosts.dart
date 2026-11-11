@@ -36,6 +36,16 @@ enum RelayRole {
 /// - [relay] and [relays]: see [RelayRole]. [relays] are relay addresses
 ///   ending in `/p2p/<id>`, needed for [RelayRole.reserve].
 /// - [holePunching]: try to replace a relayed connection with a direct one.
+///   A punch needs this node's public address, which it learns from the
+///   peers that observe it: [observersNeeded] of them must report the same
+///   address before it is used (libp2p's default is 4). A node that only
+///   ever talks to its relay has one observer, and never punches unless
+///   this is 1. A lower number trusts fewer peers about where this node
+///   is.
+/// - [announce]: which of its addresses the node tells peers about. When
+///   given, it replaces libp2p's default filter (which drops loopback
+///   addresses unless [allowLoopback]). Use it, for example, to keep LAN
+///   addresses private and advertise only relay addresses.
 /// - [keepAlive] and [keepAliveTimeout]: how often Yamux pings a
 ///   connection, and how long a ping may go unanswered before the
 ///   connection is closed and the node reported down. The timeout is what
@@ -48,7 +58,9 @@ Future<Host> startHost({
   RelayRole relay = RelayRole.client,
   List<String> relays = const [],
   bool holePunching = false,
+  int observersNeeded = 4,
   bool allowLoopback = false,
+  bool Function(String address)? announce,
   Duration keepAlive = const Duration(seconds: 15),
   Duration keepAliveTimeout = const Duration(seconds: 30),
 }) async {
@@ -75,7 +87,11 @@ Future<Host> startHost({
         (conn, isClient) =>
             YamuxSession(conn as TransportConn, muxing, isClient, null)),
     Libp2p.listenAddrs([for (final a in listen) MultiAddr(a)]),
-    if (allowLoopback) Libp2p.addrsFactory((addrs) => addrs),
+    if (announce != null)
+      Libp2p.addrsFactory(
+          (addrs) => addrs.where((a) => announce(a.toString())).toList())
+    else if (allowLoopback)
+      Libp2p.addrsFactory((addrs) => addrs),
     Libp2p.autoNAT(false),
     if (relay != RelayRole.none) Libp2p.relay(true),
     if (relay == RelayRole.server)
@@ -86,6 +102,7 @@ Future<Host> startHost({
       Libp2p.forceReachability(Reachability.private),
     ],
     if (holePunching) Libp2p.holePunching(true),
+    Libp2p.observedAddrActivationThreshold(observersNeeded),
   ]);
   await host.start();
   return host;

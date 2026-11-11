@@ -226,6 +226,20 @@ Phase 5, second part: a libp2p transport (in `packages/dactor_libp2p`).
   `packages/dactor_remote/test/support/transport_scenarios.dart`, so every
   transport runs the same ones.
 
+Phase 5, third part: through real NATs.
+
+- `Libp2pTransport` moves a node's frames off a relay when a direct
+  connection to it appears (after a hole punch), without losing order or
+  reporting the node down. The old stream ends with an empty frame as a
+  marker. New `routeTo(node)`.
+- `startHost` gained `observersNeeded` (how many peers must report the same
+  public address; a hole punch needs one) and `announce` (which addresses
+  to advertise).
+- `packages/dactor_libp2p/test/nat/run.sh`: two dactor nodes behind
+  separate NAT routers in Docker, with a Ricochet server as relay (uses
+  go-ricochet's mailbox Docker setup). Relay, hole punch and lost-node
+  checks; cone and symmetric NATs.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has
