@@ -1,5 +1,8 @@
 ## Unreleased
 
+- **`Actor.context` is no longer marked `@internal`.** The annotation made
+  the analyzer report `invalid_use_of_internal_member` on every use of
+  `context` in an actor written outside this package.
 - **The message pump yields to the event loop.** Dispatch used to run
   entirely in microtasks, so a mailbox backlog kept timers, I/O and `ask`
   timeouts waiting until it drained (a 1 ms timer measured at 1.4 s). The

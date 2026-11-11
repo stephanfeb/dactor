@@ -62,8 +62,10 @@ abstract class ActorContext {
 /// Actors are the fundamental units of computation in the actor model. They
 /// encapsulate state and behavior, and communicate with each other by sending
 abstract class Actor {
-  /// The context of the actor.
-  @internal
+  /// The context of the actor: its own reference, the sender of the message
+  /// being handled, timers, and the rest of what an actor can reach.
+  ///
+  /// Set by the system before `preStart`. Not available in the constructor.
   late ActorContext context;
 
   /// Called when a message is received.
