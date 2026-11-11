@@ -225,6 +225,9 @@ class _ActorInfo {
   Actor get actor => inc.actor;
 }
 
+// Never copied into another isolate by accident: a message or closure that
+// holds one fails to send instead.
+@pragma('vm:isolate-unsendable')
 class LocalActorSystem implements ActorSystem {
   final _actors = <String, LocalActorRef>{};
   final _actorInfo = <String, _ActorInfo>{};

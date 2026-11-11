@@ -13,6 +13,7 @@ export 'src/event_bus.dart';
 export 'src/exit_reason.dart';
 export 'src/gen_server.dart';
 export 'src/gen_statem.dart';
+export 'src/isolated.dart';
 export 'src/local_actor_ref.dart';
 export 'src/local_actor_system.dart' hide StepDelivery, StepFault;
 export 'src/local_message.dart';

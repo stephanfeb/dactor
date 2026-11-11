@@ -10,6 +10,9 @@ import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor/src/ask_config.dart';
 import 'package:dactor/src/system_messages.dart';
 
+// Never copied into another isolate by accident: a message or closure that
+// holds one fails to send instead.
+@pragma('vm:isolate-unsendable')
 class LocalActorRef implements ActorRef {
   @override
   final String id;

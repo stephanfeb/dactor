@@ -13,6 +13,7 @@ Dactor provides a robust actor system for building concurrent, fault-tolerant, a
 - 🎯 **Pure Actor Model**: Type-safe message passing with actor isolation
 - 🔄 **Reliable Ask Pattern**: Request-response with configurable retries and exponential backoff  
 - 🛡️ **Fault Tolerance**: Supervision trees with customizable recovery strategies
+- 🧱 **Isolate Placement**: run any actor in its own isolate, with a watchdog that kills and restarts it if it hangs
 - 🧩 **Typed Behaviours**: `GenServer`, `GenStatem` and `TypedRef<M>` with compile-time checked messages
 - 📡 **Event Bus**: Publish-subscribe messaging for event-driven architectures
 - ⏰ **Actor Timers**: Schedule messages with single-shot, fixed-delay, and fixed-rate timers
@@ -488,6 +489,36 @@ await apps.stopAll();
 ```
 
 If an application fails to start, the ones that call had started are stopped again.
+
+## 🧱 Actors in Their Own Isolate
+
+Wrap an actor's factory in `Isolated` and it runs in an isolate of its own:
+
+```dart
+final checker = await system.spawn(
+    'checker', () => Isolated(PrimeChecker.new),
+    supervision: OneForOneStrategy(decider: (e, s) => SupervisionDecision.restart));
+```
+
+`Isolated` is an ordinary actor in your system that forwards each message to the real actor in the isolate and waits for it to be handled. So `tell`, `ask`, supervision, child specs, links, watches and pools all work as they do for any actor. `example/isolated_example.dart` shows one being killed in an infinite loop and restarted while the rest of the system carries on.
+
+What the isolate gives you:
+
+- **A separate heap.** Messages are copied across; nothing can be shared by accident.
+- **A separate thread.** Long computations do not hold up other actors. For a pool of CPU-bound workers, combine it with `pool: Pool(workerCount: n)`.
+- **A kill that always works.** A watchdog pings the isolate (`heartbeat`, 1 s by default). If it stays silent for `unresponsiveAfter` (5 s by default) it is killed, the actor fails with `IsolateUnresponsive`, and its supervisor decides what happens next. A restart starts a fresh isolate. Raise `unresponsiveAfter` for actors that legitimately compute for longer than that without an `await`.
+
+What changes for the actor inside:
+
+- `context.system` is a small system inside the isolate. Actors it spawns live and die there with it.
+- `context.sender` points back to the sender in your system. It supports `tell` and `ask`, not `watch`.
+- Messages must be sendable between isolates. One that is not goes to the dead letters with a logged warning. An `ActorRef` of your system is deliberately not sendable; only the sender of a message travels with it.
+- The factory is sent to the isolate, so it must not capture anything unsendable. `Isolated(MyActor.new)` or a top-level function is always safe.
+- A handler error is reported to the supervisor in your system. `resume` keeps the isolate and its state; `restart` and `stop` end it.
+
+Cost, measured on one machine (Apple silicon, Dart 3.11): an isolate takes 35 to 135 µs to start and 11 to 32 KB of memory. A message to an isolated actor costs a round trip, so one-way throughput is about 60k msg/s against about 600k for a shared actor, and an `ask` takes about 20 µs against 3 µs. Use it for actors that compute, block, or run code you do not trust to return, not for everything.
+
+Limits: an isolate blocked inside a native call (synchronous I/O, FFI, `sleep`) is killed only when that call returns. `Isolated` actors cannot run inside a simulation.
 
 ## ⚡ Actor Pooling for Scalability
 

@@ -177,6 +177,25 @@ Phase 3: deterministic simulation testing.
   only when told to; the pump's dispatch step is shared between both modes.
   Throughput is unchanged.
 
+Phase 4: actors in their own isolate.
+
+- **`Isolated(factory)`**: an actor that runs the real actor in an isolate
+  of its own and forwards messages to it one at a time. It is spawned,
+  supervised, linked, watched and pooled like any other actor. Messages are
+  copied; `context.sender` inside the isolate reaches back with `tell` and
+  `ask`.
+- **Watchdog**: the isolate is pinged every `heartbeat`; one that stays
+  silent for `unresponsiveAfter` is killed and the actor fails with
+  `IsolateUnresponsive`, which its supervisor handles. This stops an actor
+  in an infinite loop, which nothing inside one isolate can do.
+- New errors `IsolateUnresponsive`, `IsolateExited`, `RemoteActorError`.
+- `LocalActorSystem` and `LocalActorRef` are marked
+  `vm:isolate-unsendable`. A message or closure that holds one now fails
+  to send to another isolate, where it used to be copied whole.
+- Probes `tool/probes/p2_isolate_kill.dart` and `p3_isolate_cost.dart`,
+  and `tool/probes/isolated_throughput.dart`.
+- Example: `example/isolated_example.dart`.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has
