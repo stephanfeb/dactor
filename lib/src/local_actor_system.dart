@@ -65,6 +65,46 @@ final class _ReplaceState extends _SysRequest {
   _ReplaceState(this.update);
 }
 
+/// What a stepped system is about to hand to an actor.
+@internal
+class StepDelivery {
+  final LocalActorRef target;
+  final Message message;
+
+  /// True for supervision signals and `sys` requests, which are delivered
+  /// whatever the hook answers.
+  final bool isSystem;
+  StepDelivery(this.target, this.message, this.isSystem);
+}
+
+/// What to do with a [StepDelivery].
+@internal
+enum StepFault {
+  /// Deliver it.
+  none,
+
+  /// Take it out of the mailbox and do not deliver it.
+  skip,
+
+  /// Take it out of the mailbox and fail the actor as if its handler threw
+  /// an [InjectedFault].
+  crash,
+}
+
+/// The error an actor fails with when a simulation makes it crash.
+class InjectedFault implements Exception {
+  final ActorRef actor;
+
+  /// The message the actor was about to handle. It is lost, as it would be
+  /// if the handler had thrown.
+  final Object? message;
+
+  const InjectedFault(this.actor, this.message);
+
+  @override
+  String toString() => 'InjectedFault: ${actor.id} was made to crash';
+}
+
 /// A handler waiting in [ActorContext.receive].
 class _PendingReceive {
   final bool Function(Object? payload) test;
@@ -230,7 +270,19 @@ class LocalActorSystem implements ActorSystem {
   int _turnCount = 0;
   bool _turnOpen = false;
 
-  LocalActorSystem([ActorSystemConfig? config])
+  /// False for a system whose messages are dispatched one at a time by
+  /// [step] instead of by the pump.
+  final bool _pumped;
+
+  LocalActorSystem([ActorSystemConfig? config]) : this._(config, true);
+
+  /// A system that dispatches nothing by itself. Whoever owns it calls
+  /// [runnableActors] and [step] to choose what runs next. This is what the
+  /// simulation in `package:dactor/simulation.dart` is built on.
+  @internal
+  LocalActorSystem.stepped([ActorSystemConfig? config]) : this._(config, false);
+
+  LocalActorSystem._(ActorSystemConfig? config, this._pumped)
       : metrics = config?.metricsCollector ?? const NoOpMetricsCollector(),
         tracer = config?.traceCollector ?? const NoOpTraceCollector(),
         logger = config?.logCollector ?? ConsoleLogCollector(),
@@ -246,7 +298,7 @@ class LocalActorSystem implements ActorSystem {
     deadLetterQueue = DeadLetterQueue(metrics,
         maxSize: config?.deadLetterQueueMaxSize ?? 1000);
     _eventBus = EventBus();
-    _messagePump();
+    if (_pumped) _messagePump();
   }
 
   /// Inspection and control of running actors.
@@ -635,43 +687,95 @@ class LocalActorSystem implements ActorSystem {
       }
       final mailbox = _activeMailboxes.removeFirst();
       _scheduledMailboxes.remove(mailbox);
-
-      if (mailbox.isDisposed) {
-        continue;
-      }
-
-      final info = _actorInfo[mailbox.actorId];
-      if (info == null || !info.started || info.suspended) {
-        // Not runnable right now; whoever makes it runnable reschedules.
-        continue;
-      }
-
-      final message =
-          info.sysSuspended ? mailbox.dequeueSystem() : mailbox.dequeue();
-      if (message == null) {
-        continue;
-      }
-      info.processed++;
-      metrics.increment('messages.processed');
-      final actorRef = _actors[mailbox.actorId]!;
-
-      _openTurn();
-      final before = _turnClock.elapsedMicroseconds;
-      _processingActors.add(mailbox.actorId);
-      _processMessage(info, actorRef, message);
+      if (!_dispatch(mailbox, null)) continue;
       final after = _turnClock.elapsedMicroseconds;
-
-      // _processMessage returns at the handler's first suspension, so this
-      // is the time the handler held the isolate without yielding.
-      if (after - before > _blockingHandlerMicros) {
-        metrics.increment('actors.blocking_handler',
-            tags: {'actorId': mailbox.actorId});
-      }
 
       if (++_turnCount >= _maxMessagesPerTurn || after >= _maxTurnMicros) {
         await Future<void>.delayed(Duration.zero);
       }
     }
+  }
+
+  /// Whether the pump could hand [mailbox]'s actor a message right now.
+  bool _isRunnable(Mailbox mailbox) {
+    if (mailbox.isDisposed) return false;
+    final info = _actorInfo[mailbox.actorId];
+    if (info == null || !info.started || info.suspended) return false;
+    return info.sysSuspended ? mailbox.hasSystemMessages : !mailbox.isEmpty;
+  }
+
+  /// Takes the next message from [mailbox] and hands it to the actor.
+  /// Returns false if there was nothing to hand over.
+  bool _dispatch(Mailbox mailbox, StepFault Function(StepDelivery)? fault) {
+    // The same test as [_isRunnable], spelled out: this is the hot path.
+    if (mailbox.isDisposed) return false;
+    final info = _actorInfo[mailbox.actorId];
+    if (info == null || !info.started || info.suspended) {
+      // Whoever makes it runnable reschedules.
+      return false;
+    }
+    final message =
+        info.sysSuspended ? mailbox.dequeueSystem() : mailbox.dequeue();
+    if (message == null) return false;
+    final actorRef = _actors[mailbox.actorId]!;
+
+    var crash = false;
+    if (fault != null) {
+      final payload = message is LocalMessage ? message.payload : message;
+      final isSystem = payload is _SupervisionSignal || payload is _SysRequest;
+      final decided = fault(StepDelivery(actorRef, message, isSystem));
+      // System messages are shown to the hook, never interfered with.
+      switch (isSystem ? StepFault.none : decided) {
+        case StepFault.none:
+          break;
+        case StepFault.skip:
+          if (!mailbox.isEmpty) scheduleMailbox(mailbox);
+          return true;
+        case StepFault.crash:
+          crash = true;
+      }
+    }
+
+    info.processed++;
+    metrics.increment('messages.processed');
+    if (_pumped) _openTurn();
+    final before = _turnClock.elapsedMicroseconds;
+    _processingActors.add(mailbox.actorId);
+    _processMessage(info, actorRef, message, crash: crash);
+
+    // _processMessage returns at the handler's first suspension, so this
+    // is the time the handler held the isolate without yielding.
+    if (_turnClock.elapsedMicroseconds - before > _blockingHandlerMicros) {
+      metrics.increment('actors.blocking_handler',
+          tags: {'actorId': mailbox.actorId});
+    }
+    return true;
+  }
+
+  /// The ids of the actors that have a message waiting and are free to
+  /// handle it, in the order the pump would serve them.
+  @internal
+  List<String> get runnableActors {
+    assert(!_pumped);
+    _activeMailboxes.removeWhere((mailbox) {
+      if (_isRunnable(mailbox)) return false;
+      _scheduledMailboxes.remove(mailbox);
+      return true;
+    });
+    return [for (final mailbox in _activeMailboxes) mailbox.actorId];
+  }
+
+  /// Hands the actor [actorId] its next message. [fault] sees every delivery
+  /// and may interfere with those of user messages.
+  @internal
+  void step(String actorId, {StepFault Function(StepDelivery)? fault}) {
+    assert(!_pumped);
+    final mailbox = _actorInfo[actorId]?.mailbox;
+    if (mailbox == null || !_scheduledMailboxes.remove(mailbox)) {
+      throw StateError('$actorId has nothing to run');
+    }
+    _activeMailboxes.remove(mailbox);
+    _sys(() => _dispatch(mailbox, fault));
   }
 
   /// Starts counting a new turn if the event loop has run since the last one.
@@ -697,8 +801,8 @@ class LocalActorSystem implements ActorSystem {
   /// The handler's future is observed from the system zone. If the actor is
   /// killed that future never completes, so the kill settles the bookkeeping
   /// through [_Incarnation.abandon] instead.
-  void _processMessage(
-      _ActorInfo info, LocalActorRef actorRef, Message message) {
+  void _processMessage(_ActorInfo info, LocalActorRef actorRef, Message message,
+      {bool crash = false}) {
     final stopwatch = Stopwatch()..start();
     // Pin the incarnation that handles this message; a restart during the
     // handler must not redirect the bookkeeping below to the replacement.
@@ -756,6 +860,8 @@ class LocalActorSystem implements ActorSystem {
           _SupervisionSignal() =>
             _superviseSignal(actor as Supervisor, payload),
           _SysRequest() => _answerSys(actor, payload),
+          _ when crash => Future<void>.error(
+              InjectedFault(actorRef, payload), StackTrace.current),
           _ => actor.onMessage(payload),
         };
         handling.then((_) => _systemZone.run(finish),

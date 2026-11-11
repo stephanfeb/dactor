@@ -187,6 +187,12 @@ class LocalActorRef implements ActorRef {
 
   @override
   void watch(ActorRef watcher) {
+    if (!_isAlive) {
+      // Too late to see it end; say so, as a link would.
+      watcher.tell(
+          LocalMessage(payload: Terminated(this, reason: const NoProcExit())));
+      return;
+    }
     _watchers.add(watcher);
   }
 

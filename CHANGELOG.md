@@ -156,6 +156,27 @@ existing actors and `ActorRef` are unchanged.
   `example/gen_statem_example.dart`. The README's first example is now the
   `GenServer` counter.
 
+Phase 3: deterministic simulation testing.
+
+- **`package:dactor/simulation.dart`**: `simulate` runs a test against an
+  actor system on a seeded scheduler with virtual time; `explore` runs it
+  under many seeds and reports the failing one with its scheduling trace.
+  The same seed always gives the same run. Timers, `Future.delayed` and
+  timeouts are virtual, so the runs take no real time.
+- **Fault injection**: a `FaultPolicy` can drop, delay or crash on any
+  delivery; `randomFaults` does so at random from the seed. A crash fails
+  the actor with `InjectedFault`.
+- **`checkCommands`**: model-based tests over random command sequences.
+- **Watching a dead actor now delivers `Terminated`** at once, with
+  `NoProcExit`, as linking to one already did. It used to do nothing, so a
+  watcher that registered a moment too late waited forever. Found by the
+  simulator.
+- Restart budgets measure their period on the simulation's clock when run
+  inside one.
+- `LocalActorSystem.stepped` (internal) builds a system that dispatches
+  only when told to; the pump's dispatch step is shared between both modes.
+  Throughput is unchanged.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

@@ -52,6 +52,8 @@ class Mailbox {
     return null;
   }
 
+  bool get hasSystemMessages => _system?.isNotEmpty ?? false;
+
   /// The next system message, leaving user messages where they are.
   Message? dequeueSystem() {
     final system = _system;

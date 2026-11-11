@@ -1,3 +1,4 @@
+import 'package:dactor/src/clock.dart';
 import 'package:meta/meta.dart';
 
 import 'package:dactor/src/actor.dart';
@@ -85,8 +86,6 @@ class RestartLimitExceeded implements Exception {
 /// Counts restarts against a limit of [maxRestarts] within [period].
 @internal
 class RestartBudget {
-  static final _clock = Stopwatch()..start();
-
   final int maxRestarts;
   final Duration? period;
   final _restarts = <int>[];
@@ -96,7 +95,7 @@ class RestartBudget {
   /// Records one restart. Returns false if that takes the count over the
   /// limit.
   bool record() {
-    final now = _clock.elapsedMicroseconds;
+    final now = monotonicMicros();
     final window = period;
     if (window != null) {
       final cutoff = now - window.inMicroseconds;

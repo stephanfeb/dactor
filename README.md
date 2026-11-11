@@ -1301,6 +1301,47 @@ test('should handle replies from probe', () async {
 
 4. **Access last message**: Use `probe.lastMessage` to inspect the most recent message for detailed assertions
 
+### Deterministic Simulation
+
+`package:dactor/simulation.dart` runs an actor system on a seeded scheduler with virtual time. One message is delivered at a time, and which actor goes next is drawn from the seed, so a test can be run under many orderings and a failure replayed exactly.
+
+```dart
+import 'package:dactor/simulation.dart';
+
+test('transfers never lose money', () {
+  explore((sim) async {
+    final bank = await sim.system.spawn('bank', () => Bank());
+    // ... send messages from several actors ...
+    await sim.settle();                         // until every actor is idle
+    await sim.wait(Duration(minutes: 5));       // virtual: returns at once
+    expect(await bank.ask<int>(LocalMessage(payload: Total())), 1000);
+  }, seeds: 1000);
+});
+```
+
+When a seed fails, `explore` throws a `SimulationFailure` that names the seed and lists the last scheduling steps. `simulate(body, seed: n)` runs that one seed again, with the same result every time.
+
+| | |
+|---|---|
+| `simulate(body, seed:)` | One run. Synchronous: the whole run happens inside the call and its result is returned. |
+| `explore(body, seeds:)` | Many seeds, stopping at the first failure. |
+| `sim.system` | The simulated `LocalActorSystem`. |
+| `sim.settle()` | Completes when no actor has anything left to do at the current time. |
+| `sim.wait(duration)` | Virtual sleep. `Future.delayed`, timers and timeouts are virtual as well. |
+| `sim.random` | The run's random source. Take the test's own random choices from it so they replay too. |
+| `sim.trace` | The scheduling decisions so far. |
+
+**Fault injection.** Pass `faults:` to interfere with deliveries. A policy sees each user message about to be delivered and answers `Fault.none`, `Fault.drop`, `Fault.delay(duration)` or `Fault.crash`, which fails the actor with an `InjectedFault` as if its handler had thrown. `randomFaults(drop: 0.05, crash: 0.1, delay: 0.1)` does it at random, from the seed.
+
+**Model-based tests.** `checkCommands` generates random command sequences, applies each to the actor and to a plain-Dart model, and reports the seed and the commands when they disagree. Sequences are not shrunk.
+
+Limits:
+
+- Only message order and time are simulated. `DateTime.now()` and `Stopwatch` read the real clock, and correlation ids are still random.
+- Nothing outside the isolate completes inside a simulation: no sockets, files or other isolates. Waiting for one ends the run with `SimulationDeadlock`.
+- Continuations of one handler run in the order Dart runs them. The scheduler reorders deliveries and timers, not microtasks.
+- The simulation needs the real `LocalActorSystem`; it does not combine with `TestActorSystem`.
+
 ### Tracing Message Flow
 
 For more complex scenarios, you can trace the entire flow of a message through the system. This is useful for debugging and ensuring messages are processed correctly.
