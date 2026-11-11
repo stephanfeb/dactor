@@ -18,6 +18,7 @@ export 'src/mailbox.dart';
 export 'src/message.dart';
 export 'src/metrics/metrics.dart';
 export 'src/one_for_one_strategy.dart';
+export 'src/rest_for_one_strategy.dart';
 export 'src/routing/pool.dart';
 export 'src/routing/routing_logic.dart';
 export 'src/supervisor_actor.dart';

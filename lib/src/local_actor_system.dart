@@ -24,6 +24,32 @@ import 'package:dactor/src/exit_reason.dart';
 import 'package:dactor/src/timer_scheduler.dart';
 import 'package:dactor/src/dactor_timer_scheduler.dart';
 
+/// A message from the system to a supervisor, delivered through the
+/// supervisor's mailbox ahead of its user messages and never passed to
+/// `onMessage`.
+sealed class _SupervisionSignal {}
+
+/// A child failed and is waiting, suspended, for a decision.
+final class _ChildFailed extends _SupervisionSignal {
+  final LocalActorRef child;
+  final _ActorInfo info;
+  final _Incarnation inc;
+  final Object error;
+  final StackTrace stackTrace;
+
+  /// Completed by the supervisor's slot with what it decided.
+  final decision = Completer<SupervisionDecision>();
+
+  _ChildFailed(this.child, this.info, this.inc, this.error, this.stackTrace);
+}
+
+/// A child is gone for good.
+final class _ChildExited extends _SupervisionSignal {
+  final LocalActorRef child;
+  final ExitReason reason;
+  _ChildExited(this.child, this.reason);
+}
+
 /// One run of an actor: the [Actor] instance a factory produced, and the zone
 /// all of its code runs in. A restart retires one incarnation and starts the
 /// next.
@@ -93,6 +119,10 @@ class _ActorInfo {
   /// actor that has not finished initialising.
   bool started = false;
 
+  /// Whether any incarnation ever completed `preStart`. An actor that never
+  /// started was never really there, and its supervisor is not told it left.
+  bool everStarted = false;
+
   /// True while the current incarnation has failed and its supervisor is
   /// still deciding. The pump delivers nothing in the meantime.
   bool suspended = false;
@@ -101,10 +131,13 @@ class _ActorInfo {
   /// restarting this actor stops them first, last-started first.
   final children = <String>{};
 
-  /// Tail of the chain of supervision decisions this actor is making for its
-  /// children. Failures of two children are handled one after the other, never
-  /// interleaved.
-  Future<void>? supervisionTail;
+  /// Restart budget of a top-level actor spawned with a strategy. Supervised
+  /// actors draw on their supervisor's budget instead.
+  RestartBudget? budget;
+
+  /// How long a stop or restart waits for this actor's handler in flight, if
+  /// that differs from the system default.
+  Duration? stopTimeout;
 
   /// Set once teardown has begun; a second stop waits on the first.
   Future<void>? stopping;
@@ -283,6 +316,7 @@ class LocalActorSystem implements ActorSystem {
     String childId,
     Actor Function() actorFactory, {
     SupervisionStrategy? supervision,
+    Duration? stopTimeout,
   }) {
     return _sysAsync(() async {
       if (childId.isEmpty || childId.contains('/')) {
@@ -295,7 +329,9 @@ class LocalActorSystem implements ActorSystem {
             parentId, 'parentId', 'is not a live Supervisor');
       }
       final spawned = await _spawn('$parentId/$childId', actorFactory,
-          supervision: supervision, parentId: parentId);
+          supervision: supervision,
+          parentId: parentId,
+          stopTimeout: stopTimeout);
       return spawned.ref;
     });
   }
@@ -316,6 +352,7 @@ class LocalActorSystem implements ActorSystem {
     Actor Function() actorFactory, {
     SupervisionStrategy? supervision,
     String? parentId,
+    Duration? stopTimeout,
   }) async {
     if (_isShutdown) {
       throw StateError('Actor system is shutdown');
@@ -333,7 +370,8 @@ class LocalActorSystem implements ActorSystem {
         LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
     final info = _ActorInfo(
         _newIncarnation(id, actor), actorFactory, supervision, mailbox,
-        parentId: parentId);
+        parentId: parentId)
+      ..stopTimeout = stopTimeout;
 
     _actors[id] = actorRef;
     _actorInfo[id] = info;
@@ -402,6 +440,7 @@ class LocalActorSystem implements ActorSystem {
       return;
     }
     info.started = true;
+    info.everStarted = true;
     info.suspended = false;
     if (!info.mailbox.isEmpty) {
       scheduleMailbox(info.mailbox);
@@ -520,19 +559,23 @@ class LocalActorSystem implements ActorSystem {
   /// Whether a graceful stop or restart should wait for [inc] to finish what
   /// it is doing. It does not wait for a handler that has already failed, nor
   /// for the handler that is itself asking for the stop.
-  bool _mustWait(_Incarnation inc, _Incarnation? requester) =>
-      inc.busy && !inc.failed && !identical(inc, requester);
+  bool _mustWait(_ActorInfo info, _Incarnation inc, _Incarnation? requester) =>
+      inc.busy &&
+      !inc.failed &&
+      !identical(inc, requester) &&
+      info.stopTimeout != Duration.zero;
 
   /// Waits for [inc] to finish `preStart` or the handler in flight, for at
-  /// most [_stopTimeout].
-  Future<void> _awaitIdle(_Incarnation inc, String id) {
-    return inc.idle.timeout(_stopTimeout, onTimeout: () {
+  /// most the actor's stop timeout.
+  Future<void> _awaitIdle(_ActorInfo info, _Incarnation inc, String id) {
+    final timeout = info.stopTimeout ?? _stopTimeout;
+    return inc.idle.timeout(timeout, onTimeout: () {
       inc.exitReason ??= const KilledExit();
       metrics.increment('actors.stop_timed_out', tags: {'actorId': id});
       logger.record(LogRecord(
           LogLevel.warning,
           '$id did not finish its current handler within '
-          '${_stopTimeout.inMilliseconds} ms and was killed'));
+          '${timeout.inMilliseconds} ms and was killed'));
     });
   }
 
@@ -658,7 +701,10 @@ class LocalActorSystem implements ActorSystem {
     // carried back to the system zone, where the bookkeeping lives.
     try {
       inc.run(() {
-        actor.onMessage(payload).then((_) => _systemZone.run(finish),
+        final Future<void> handling = payload is _SupervisionSignal
+            ? _superviseSignal(actor as Supervisor, payload)
+            : actor.onMessage(payload);
+        handling.then((_) => _systemZone.run(finish),
             onError: (Object e, StackTrace s) =>
                 _systemZone.run(() => failed(e, s)));
       });
@@ -738,63 +784,97 @@ class LocalActorSystem implements ActorSystem {
     }
   }
 
+  /// Handles a [_SupervisionSignal] as one of the supervisor's messages.
+  /// Runs in the supervisor's zone, in its mailbox slot, so it never overlaps
+  /// the supervisor's `onMessage` or another signal.
+  Future<void> _superviseSignal(
+      Supervisor supervisor, _SupervisionSignal signal) async {
+    switch (signal) {
+      case _ChildFailed():
+        if (!_isCurrent(signal.info, signal.inc) || signal.inc.retiring) {
+          // An earlier decision (all-for-one, a cascade) already replaced or
+          // stopped this incarnation.
+          signal.decision.complete(SupervisionDecision.resume);
+          return;
+        }
+        try {
+          signal.decision.complete(await supervisor.onChildFailure(
+              signal.child, signal.error, signal.stackTrace));
+        } on RestartLimitExceeded {
+          // The supervisor has given up: it fails, as if this handler threw.
+          signal.decision.complete(SupervisionDecision.stop);
+          rethrow;
+        } catch (e, s) {
+          // A bug in the supervisor's own decision. The child cannot be left
+          // suspended; the system stops it and the supervisor carries on.
+          signal.decision.completeError(e, s);
+        }
+      case _ChildExited():
+        await supervisor.onChildExited(signal.child, signal.reason);
+    }
+  }
+
   /// Decides what happens to [failed], the incarnation of [info] that failed.
   ///
-  /// A supervised actor is handed to its parent's `onChildFailure`. If the
-  /// parent answers [SupervisionDecision.escalate], the parent is treated as
-  /// having failed with the same error and the decision moves one level up.
-  /// A top-level actor is governed by the strategy it was spawned with, and
-  /// is stopped if it has none or if the failure escalates past the top.
+  /// A supervised actor's failure is sent to its parent as a system message
+  /// and answered by the parent's `onChildFailure`. If the parent answers
+  /// [SupervisionDecision.escalate], the parent is treated as having failed
+  /// with the same error and the decision moves one level up. A top-level
+  /// actor is governed by the strategy it was spawned with, and is stopped if
+  /// it has none or if the failure escalates past the top.
   Future<void> _handleFailure(_ActorInfo info, LocalActorRef actorRef,
       _Incarnation failed, Object error, StackTrace stackTrace) async {
     final parentId = info.parentId;
-    final parentInfo = parentId == null ? null : _actorInfo[parentId];
-
-    if (parentInfo != null && parentInfo.actor is Supervisor) {
-      // One decision at a time per supervisor: a second child failing while
-      // the first is still being restarted waits its turn.
-      final previous = parentInfo.supervisionTail;
-      final done = Completer<void>();
-      parentInfo.supervisionTail = done.future;
-      try {
-        if (previous != null) await previous;
-        // An earlier decision (all-for-one, a cascade) may already have
-        // replaced or stopped this incarnation.
-        if (!_isCurrent(info, failed) || failed.retiring) return;
-        final parentInc = parentInfo.inc;
-        final parent = parentInc.actor;
-        final parentRef = _actors[parentId];
-        if (parent is! Supervisor ||
-            parentRef == null ||
-            parentInc.isDead ||
-            !identical(_actorInfo[parentId], parentInfo)) {
-          await _stopActor(actorRef);
-          return;
-        }
-        // The decision is the supervisor's code, so it runs in the
-        // supervisor's zone. If the supervisor dies meanwhile, its children
-        // go with it and this never needs an answer.
-        final deciding = _inActor<SupervisionDecision>(parentInc,
-            () => parent.onChildFailure(actorRef, error, stackTrace));
-        final decision = deciding is Future<SupervisionDecision>
-            ? await Future.any<SupervisionDecision?>(
-                [deciding, parentInc.killed.then((_) => null)])
-            : deciding;
-        if (decision == SupervisionDecision.escalate) {
+    if (parentId != null) {
+      final parentInfo = _actorInfo[parentId];
+      final parentRef = _actors[parentId];
+      if (parentInfo == null ||
+          parentRef == null ||
+          parentInfo.actor is! Supervisor ||
+          parentInfo.mailbox.isDisposed) {
+        // The supervisor is gone: nobody is left to decide.
+        await _stopActor(actorRef);
+        return;
+      }
+      final signal = _ChildFailed(actorRef, info, failed, error, stackTrace);
+      parentInfo.mailbox.enqueueSystem(LocalMessage(payload: signal));
+      // If the supervisor dies before it answers, this never completes; its
+      // children are stopped along with it.
+      final decision = await signal.decision.future;
+      if (!_isCurrent(info, failed) || failed.retiring) return;
+      switch (decision) {
+        case SupervisionDecision.escalate:
           metrics.increment('actors.escalated', tags: {'actorId': actorRef.id});
-          await _handleFailure(
-              parentInfo, parentRef, parentInc, error, stackTrace);
-        }
-      } finally {
-        done.complete();
+          if (_isCurrent(parentInfo, parentInfo.inc)) {
+            await _fail(
+                parentInfo, parentRef, parentInfo.inc, error, stackTrace);
+          }
+        case SupervisionDecision.stop:
+          await _stopActor(actorRef);
+        case SupervisionDecision.resume:
+        case SupervisionDecision.restart:
+          break;
       }
       return;
     }
 
-    final strategy = parentId == null ? info.supervision : null;
-    final decision = strategy == null
+    final strategy = info.supervision;
+    var decision = strategy == null
         ? SupervisionDecision.stop
         : strategy.handle(actorRef.id, error, stackTrace);
+    if (decision == SupervisionDecision.restart && strategy != null) {
+      final budget =
+          info.budget ??= RestartBudget(strategy.maxRestarts, strategy.period);
+      if (!budget.record()) {
+        metrics.increment('actors.restart_limit_exceeded',
+            tags: {'actorId': actorRef.id});
+        failed.exitReason = ErrorExit(
+            RestartLimitExceeded(actorRef.id, actorRef.id, error,
+                strategy.maxRestarts, strategy.period),
+            stackTrace);
+        decision = SupervisionDecision.stop;
+      }
+    }
     switch (decision) {
       case SupervisionDecision.resume:
         break;
@@ -846,8 +926,8 @@ class LocalActorSystem implements ActorSystem {
     info.started = false;
     final old = info.inc;
     old.retiring = true;
-    if (_mustWait(old, requester)) {
-      await _awaitIdle(old, id);
+    if (_mustWait(info, old, requester)) {
+      await _awaitIdle(info, old, id);
     }
     if (info.children.isNotEmpty) {
       await _stopChildren(info, requester);
@@ -887,6 +967,18 @@ class LocalActorSystem implements ActorSystem {
     }
     final requester = _caller;
     return _sysAsync(() => _stopActor(actor, requester: requester));
+  }
+
+  /// Stops [child] on behalf of its supervisor: like [stop], but the child
+  /// ends with [ShutdownExit].
+  @internal
+  Future<void> stopChild(ActorRef child) {
+    if (_isShutdown) {
+      return Future<void>.value();
+    }
+    final requester = _caller;
+    return _sysAsync(() =>
+        _stopActor(child, requester: requester, reason: const ShutdownExit()));
   }
 
   /// Stops [actor] and its children immediately, without waiting for
@@ -969,8 +1061,8 @@ class LocalActorSystem implements ActorSystem {
     // With nothing in flight and no children this runs to completion without
     // suspending, so a caller that does not await stop() still sees the
     // actor gone.
-    if (_mustWait(inc, requester)) {
-      await _awaitIdle(inc, actorRef.id);
+    if (_mustWait(info, inc, requester)) {
+      await _awaitIdle(info, inc, actorRef.id);
     }
     if (info.children.isNotEmpty) {
       await _stopChildren(info, requester);
@@ -994,7 +1086,19 @@ class LocalActorSystem implements ActorSystem {
     _actorInfo.remove(actorRef.id);
     final parentId = info?.parentId;
     if (parentId != null) {
-      _actorInfo[parentId]?.children.remove(actorRef.id);
+      final parent = _actorInfo[parentId];
+      if (parent != null) {
+        parent.children.remove(actorRef.id);
+        // Tell the supervisor, unless it is on its way out itself.
+        if (!_isShutdown &&
+            info!.everStarted &&
+            parent.actor is Supervisor &&
+            !parent.inc.retiring &&
+            parent.stopping == null) {
+          parent.mailbox.enqueueSystem(
+              LocalMessage(payload: _ChildExited(actorRef, reason)));
+        }
+      }
     }
     metrics.gauge('actors.active', _actors.length.toDouble());
     metrics.increment('actors.stopped');

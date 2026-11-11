@@ -89,6 +89,37 @@ Phase 1, second part: exit reasons and links.
   across restarts. Watchers are different: they are still told only when the
   actor is gone for good.
 
+Phase 1, third part: supervisors.
+
+- **Restart budgets belong to the supervisor, not to each child.** A
+  supervisor that performs more than `maxRestarts` restarts within `period`
+  (10 in 5 seconds by default), across all its children, gives up: it fails
+  with `RestartLimitExceeded`, its children stop with it, and its own
+  supervisor decides. Previously each child had a lifetime count of its own
+  and was quietly stopped when it ran out.
+- `maxRetries` and `within` on the strategies are deprecated in favour of
+  `maxRestarts` and `period`. The default period is now 5 seconds; it used
+  to be unlimited.
+- Strategies are immutable and can be `const`. Sharing one instance between
+  supervisors no longer mixes their budgets. Custom strategies should extend
+  `SupervisionStrategy` rather than implement it.
+- A top-level actor spawned with `supervision:` has its own budget and is
+  stopped with `RestartLimitExceeded` when it runs out.
+- Added `RestForOneStrategy`.
+- Added `ChildSpec` and `RestartType` (`permanent`, `transient`,
+  `temporary`), with `SupervisorActor.startChild`, `startChildren` and
+  `terminateChild`. `supervise` takes optional `restart:` and `shutdown:`.
+- **A permanent child that stops is started again.** `supervise(id, factory)`
+  creates permanent children, so `system.stop(child)` on one now brings it
+  back as a new actor under the same id. Use `terminateChild`, or make the
+  child `transient` or `temporary`.
+- **Supervision decisions go through the supervisor's mailbox**, ahead of
+  its ordinary messages. `onChildFailure` no longer runs at the same time as
+  the supervisor's `onMessage`.
+- Added `Supervisor.onChildExited`.
+- A pool router now restarts workers within the default budget and fails
+  when it is exceeded; it used to restart them without limit.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

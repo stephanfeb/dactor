@@ -39,11 +39,4 @@ class RouterActor extends SupervisorActor {
     _nextWorkerIndex = (_nextWorkerIndex + 1) % _workers.length;
     worker.tell(LocalMessage(payload: message), sender: context.sender);
   }
-
-  @override
-  Future<SupervisionDecision> onChildFailure(
-      ActorRef child, Object error, StackTrace stackTrace) async {
-    await context.restart(child);
-    return SupervisionDecision.restart;
-  }
 }

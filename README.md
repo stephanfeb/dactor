@@ -219,7 +219,7 @@ final config = AskConfig(
 
 ## 🛡️ Supervision and Fault Tolerance
 
-Actors can supervise children and handle failures gracefully:
+A supervisor starts children, and decides what happens when one fails:
 
 ```dart
 class WorkerActor extends Actor {
@@ -233,43 +233,67 @@ class WorkerActor extends Actor {
 }
 
 class MySupervisor extends SupervisorActor {
-  MySupervisor() : super(
-    AllForOneStrategy(
-      decider: (error, stackTrace) => SupervisionDecision.restart,
-      maxRetries: 3,
-    ),
-  );
+  MySupervisor()
+      : super(const OneForOneStrategy(
+          decider: _decide,
+          maxRestarts: 3,
+          period: Duration(seconds: 5),
+        ));
 
+  static SupervisionDecision _decide(Object error, StackTrace stackTrace) =>
+      SupervisionDecision.restart;
+
+  // Children created in preStart come back when the supervisor is restarted.
   @override
-  Future<void> onMessage(dynamic message) async {
-    if (message == 'create_worker') {
-      await supervise('worker', () => WorkerActor());
-    }
-  }
+  Future<void> preStart() => startChildren([
+        ChildSpec('worker', () => WorkerActor()),
+        ChildSpec('cache', () => CacheActor(), restart: RestartType.transient),
+      ]);
 }
 
-// Usage
 final supervisor = await system.spawn('supervisor', () => MySupervisor());
-supervisor.tell('create_worker');
+final worker = system.getActor('supervisor/worker');
 ```
 
 ### Supervision Strategies
 
-**OneForOneStrategy**: Only the failed actor is affected
+A strategy says which children a restart applies to:
+
+| Strategy | Restarts |
+|---|---|
+| `OneForOneStrategy` | Only the child that failed |
+| `AllForOneStrategy` | Every child of the supervisor |
+| `RestForOneStrategy` | The failed child and every child started after it |
+
+Strategies hold no state, so one instance can be shared between supervisors.
+
+### Restart Budget
+
+`maxRestarts` and `period` set how much restarting a supervisor tolerates, **across all of its children together**. The defaults are 10 restarts in 5 seconds.
+
+When the budget is exceeded the supervisor gives up: it fails with `RestartLimitExceeded`, its children are stopped with it, and its own supervisor decides what to do, typically restarting the whole subtree from a clean state. A crash loop therefore climbs the tree until some level can fix it, or stops at the top.
+
+A top-level actor spawned with `supervision:` has a budget of its own and is stopped when it runs out.
+
+### Child Specs
+
 ```dart
-final strategy = OneForOneStrategy(
-  decider: (error, stackTrace) => SupervisionDecision.restart,
-  maxRetries: 3,
-);
+ChildSpec('worker', () => WorkerActor(),
+    restart: RestartType.permanent,          // the default
+    shutdown: Duration(seconds: 2));         // wait this long when stopping it
 ```
 
-**AllForOneStrategy**: All supervised actors are affected by one failure
-```dart
-final strategy = AllForOneStrategy(
-  decider: (error, stackTrace) => SupervisionDecision.restart,
-  maxRetries: 1,
-);
-```
+| `RestartType` | The child is started again |
+|---|---|
+| `permanent` | After a failure, and also if it stops for any other reason the supervisor did not ask for |
+| `transient` | After a failure or a kill, but not after a normal stop |
+| `temporary` | Never; a temporary child that fails is stopped and forgotten |
+
+- A failed child is restarted in place and keeps its `ActorRef`. A child that had *stopped* is gone, so it is started again as a new actor under the same id: look it up again with `getActor`.
+- `supervisor.terminateChild(name)` stops a child for good, whatever its restart type.
+- `supervise(name, factory)` is shorthand for `startChild(ChildSpec(name, factory))`.
+
+Supervision decisions run as messages in the supervisor's own mailbox, ahead of its ordinary messages. A decision never overlaps the supervisor's `onMessage`, and the failed child receives nothing until the decision is made.
 
 **Supervision Decisions**:
 - `SupervisionDecision.restart` - Restart the failed actor in place. The `ActorRef`, its mailbox (pending messages are kept), watchers and event-bus subscriptions survive; only the `Actor` instance is replaced. `postStop` runs on the old instance and `preStart` on the new one. The message that caused the failure is not redelivered.
