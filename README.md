@@ -366,6 +366,13 @@ switch (message) {
 }
 ```
 
+### Lints
+
+Actors in one isolate share a heap, so nothing stops a message from carrying mutable state across. The `dactor_lints` analyzer plugin (in `packages/dactor_lints`, Dart 3.10 or later) reports the two common ways that happens:
+
+- `dactor_mutable_message`: an object sent between actors has a field that can be reassigned.
+- `dactor_captured_actor_state`: an actor sends a closure, or itself, in a message.
+
 Limits: a handler in a synchronous loop cannot be interrupted, and work an actor starts through `Zone.root.run` is outside its zone.
 
 ## ⚡ Actor Pooling for Scalability

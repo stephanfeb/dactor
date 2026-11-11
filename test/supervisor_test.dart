@@ -33,7 +33,7 @@ class _Kid extends Actor {
 
 class _Sup extends SupervisorActor {
   final List<ChildSpec> specs;
-  _Sup(SupervisionStrategy strategy, this.specs) : super(strategy);
+  _Sup(super.strategy, this.specs);
 
   @override
   FutureOr<void> preStart() async {

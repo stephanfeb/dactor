@@ -120,6 +120,15 @@ Phase 1, third part: supervisors.
 - A pool router now restarts workers within the default budget and fails
   when it is exceeded; it used to restart them without limit.
 
+Phase 1, fourth part: lints.
+
+- Added `packages/dactor_lints`, an analyzer plugin (Dart 3.10 or later)
+  with two rules, both reported by `dart analyze` and in the IDE:
+  `dactor_mutable_message` (an object sent between actors has a field that
+  can be reassigned) and `dactor_captured_actor_state` (an actor sends a
+  closure, or itself, in a message). This repository's own code has no
+  findings. See `packages/dactor_lints/README.md` for how to enable it.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has
