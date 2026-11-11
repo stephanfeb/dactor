@@ -1,3 +1,25 @@
+## Unreleased
+
+- **The message pump yields to the event loop.** Dispatch used to run
+  entirely in microtasks, so a mailbox backlog kept timers, I/O and `ask`
+  timeouts waiting until it drained (a 1 ms timer measured at 1.4 s). The
+  pump now stops after 128 messages or 4 ms in one event-loop turn and
+  resumes on the next. Both limits are configurable through
+  `ActorSystemConfig.maxMessagesPerTurn` and `maxTurnDuration`. Throughput is
+  unchanged.
+- New metric `actors.blocking_handler`, tagged with the actor id, counts
+  handlers that run for longer than
+  `ActorSystemConfig.blockingHandlerThreshold` (10 ms by default) before
+  their first `await`.
+- **A failed `preStart` rolls the spawn back.** `spawn` still rejects, but
+  the id is free again, refs obtained in the meantime are dead, and
+  `postStop` is not called on an actor that never started. Previously the
+  actor stayed registered and processed messages uninitialised.
+- An actor stopped while its `preStart` is still running gets its `postStop`
+  once `preStart` completes.
+- A throwing `postStop` no longer aborts `stop()` or `shutdown()`; it is
+  counted as `actors.post_stop_failed` and logged.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

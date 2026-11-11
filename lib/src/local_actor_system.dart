@@ -64,14 +64,36 @@ class LocalActorSystem implements ActorSystem {
   final AskConfig askConfig;
 
   bool _isShutdown = false;
-  bool _isProcessing = false;
   Completer<void> _pumpSignal = Completer<void>();
+
+  /// Most messages dispatched in one event-loop turn before the pump yields.
+  final int _maxMessagesPerTurn;
+
+  /// Longest the pump keeps dispatching in one event-loop turn, in
+  /// microseconds, before it yields.
+  final int _maxTurnMicros;
+
+  /// A handler that runs synchronously for longer than this, in microseconds,
+  /// is counted as `actors.blocking_handler`.
+  final int _blockingHandlerMicros;
+
+  /// Measures how long the pump has held the current event-loop turn.
+  final _turnClock = Stopwatch();
+  int _turnCount = 0;
+  bool _turnOpen = false;
 
   LocalActorSystem([ActorSystemConfig? config])
       : metrics = config?.metricsCollector ?? const NoOpMetricsCollector(),
         tracer = config?.traceCollector ?? const NoOpTraceCollector(),
         logger = config?.logCollector ?? ConsoleLogCollector(),
-        askConfig = config?.askConfig ?? AskConfig() {
+        askConfig = config?.askConfig ?? AskConfig(),
+        _maxMessagesPerTurn = config?.maxMessagesPerTurn ?? 128,
+        _maxTurnMicros =
+            (config?.maxTurnDuration ?? const Duration(milliseconds: 4))
+                .inMicroseconds,
+        _blockingHandlerMicros = (config?.blockingHandlerThreshold ??
+                const Duration(milliseconds: 10))
+            .inMicroseconds {
     deadLetterQueue = DeadLetterQueue(metrics,
         maxSize: config?.deadLetterQueueMaxSize ?? 1000);
     _eventBus = EventBus();
@@ -162,7 +184,18 @@ class LocalActorSystem implements ActorSystem {
     _actors[id] = actorRef;
     _actorInfo[id] = info;
 
-    await _startIncarnation(info, actorRef);
+    try {
+      await _startIncarnation(info, actorRef);
+    } catch (_) {
+      // preStart failed: the actor never existed. Free the id and release
+      // whatever was registered, without running postStop on an actor that
+      // did not finish initialising.
+      metrics.increment('actors.start_failed', tags: {'actorId': id});
+      if (identical(_actorInfo[id], info)) {
+        await _stopActor(actorRef);
+      }
+      rethrow;
+    }
     metrics.increment('actors.spawned');
     metrics.gauge('actors.active', _actors.length.toDouble());
 
@@ -176,42 +209,108 @@ class LocalActorSystem implements ActorSystem {
     final actor = info.actor;
     actor.context = _ActorContext(actorRef, this);
     await actor.preStart();
+    if (!_isCurrent(info, actor)) {
+      // Stopped or replaced while preStart was still running. This
+      // incarnation did start, so it is owed its postStop.
+      _disposeTimers(actor);
+      _runPostStop(actor, actorRef.id);
+      return;
+    }
     info.started = true;
     if (!info.mailbox.isEmpty) {
       scheduleMailbox(info.mailbox);
     }
   }
 
+  /// True while [actor] is the running incarnation of the cell [info].
+  bool _isCurrent(_ActorInfo info, Actor actor) =>
+      identical(_actorInfo[actor.context.self.id], info) &&
+      identical(info.actor, actor);
+
+  void _disposeTimers(Actor actor) {
+    final timers = actor.context.timers;
+    if (timers is DactorTimerScheduler) {
+      timers.dispose();
+    }
+  }
+
+  /// Runs `postStop`, containing anything it throws so that one bad hook
+  /// cannot abort a stop, a restart or a shutdown.
+  void _runPostStop(Actor actor, String id) {
+    try {
+      actor.postStop();
+    } catch (e) {
+      metrics.increment('actors.post_stop_failed', tags: {'actorId': id});
+      logger.record(LogRecord(LogLevel.error, 'postStop of $id threw: $e'));
+    }
+  }
+
+  /// Dispatches messages until shutdown.
+  ///
+  /// Dispatch itself only ever schedules microtasks, so a backlog would keep
+  /// timers and I/O waiting until it drained. The pump therefore works in
+  /// turns: after [_maxMessagesPerTurn] messages or [_maxTurnMicros] in one
+  /// event-loop turn, it yields through a zero-duration timer and lets the
+  /// event loop run.
   void _messagePump() async {
-    _isProcessing = true;
     while (!_isShutdown) {
-      if (_activeMailboxes.isNotEmpty) {
-        final mailbox = _activeMailboxes.removeFirst();
-        _scheduledMailboxes.remove(mailbox);
-
-        if (mailbox.isDisposed) {
-          continue;
-        }
-
-        final info = _actorInfo[mailbox.actorId];
-        if (info == null || !info.started) {
-          // Not (yet) runnable; _startIncarnation reschedules once ready.
-          continue;
-        }
-
-        final message = mailbox.dequeue();
-        if (message != null) {
-          metrics.increment('messages.processed');
-          final actorRef = _actors[mailbox.actorId]!;
-
-          _processingActors.add(mailbox.actorId);
-          _processMessageAsync(info, actorRef, message);
-        }
-      } else {
+      if (_activeMailboxes.isEmpty) {
         await _waitForWork();
+        continue;
+      }
+      final mailbox = _activeMailboxes.removeFirst();
+      _scheduledMailboxes.remove(mailbox);
+
+      if (mailbox.isDisposed) {
+        continue;
+      }
+
+      final info = _actorInfo[mailbox.actorId];
+      if (info == null || !info.started) {
+        // Not (yet) runnable; _startIncarnation reschedules once ready.
+        continue;
+      }
+
+      final message = mailbox.dequeue();
+      if (message == null) {
+        continue;
+      }
+      metrics.increment('messages.processed');
+      final actorRef = _actors[mailbox.actorId]!;
+
+      _openTurn();
+      final before = _turnClock.elapsedMicroseconds;
+      _processingActors.add(mailbox.actorId);
+      _processMessageAsync(info, actorRef, message);
+      final after = _turnClock.elapsedMicroseconds;
+
+      // _processMessageAsync returns at the handler's first suspension, so
+      // this is the time the handler held the isolate without yielding.
+      if (after - before > _blockingHandlerMicros) {
+        metrics.increment('actors.blocking_handler',
+            tags: {'actorId': mailbox.actorId});
+      }
+
+      if (++_turnCount >= _maxMessagesPerTurn || after >= _maxTurnMicros) {
+        await Future<void>.delayed(Duration.zero);
       }
     }
-    _isProcessing = false;
+  }
+
+  /// Starts counting a new turn if the event loop has run since the last one.
+  ///
+  /// The sentinel timer fires on the next event-loop turn, which is the only
+  /// reliable sign that timers and I/O have had a chance to run. Until then
+  /// every message counts against the same budget, however many times the
+  /// pump went idle and was woken by a microtask in between.
+  void _openTurn() {
+    if (_turnOpen) return;
+    _turnOpen = true;
+    _turnCount = 0;
+    _turnClock
+      ..reset()
+      ..start();
+    Timer.run(() => _turnOpen = false);
   }
 
   /// Processes a single message asynchronously without blocking the message pump.
@@ -313,17 +412,14 @@ class LocalActorSystem implements ActorSystem {
     }
     metrics.increment('actors.restarted', tags: {'actorId': id});
 
+    final wasStarted = info.started;
     info.started = false;
     final old = info.actor;
-    final timers = old.context.timers;
-    if (timers is DactorTimerScheduler) {
-      timers.dispose();
-    }
-    try {
-      old.postStop();
-    } catch (e) {
-      // A failing postStop must not prevent the restart.
-      metrics.increment('actors.post_stop_failed', tags: {'actorId': id});
+    _disposeTimers(old);
+    if (wasStarted) {
+      // An incarnation still inside preStart gets its postStop from
+      // _startIncarnation, once it notices it has been replaced.
+      _runPostStop(old, id);
     }
 
     info.actor = info.factory();
@@ -331,7 +427,9 @@ class LocalActorSystem implements ActorSystem {
       await _startIncarnation(info, actorRef);
     } catch (e) {
       // The replacement could not initialise; there is nothing left to run.
-      await _stopActor(actorRef);
+      if (identical(_actorInfo[id], info)) {
+        await _stopActor(actorRef);
+      }
       rethrow;
     }
   }
@@ -353,12 +451,13 @@ class LocalActorSystem implements ActorSystem {
     if (actorRef is LocalActorRef) {
       final info = _actorInfo[actor.id];
       if (info != null) {
-        final timerScheduler = info.actor.context.timers;
-        if (timerScheduler is DactorTimerScheduler) {
-          timerScheduler.dispose();
+        _disposeTimers(info.actor);
+        // An actor whose preStart has not completed has nothing to release
+        // yet; if preStart is still running it gets postStop when it ends.
+        if (info.started) {
+          info.started = false;
+          _runPostStop(info.actor, actor.id);
         }
-
-        info.actor.postStop();
       }
 
       _eventBus.cleanup(actorRef);
