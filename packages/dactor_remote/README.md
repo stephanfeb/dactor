@@ -22,7 +22,7 @@ print(await store.call(Fetch('language')));
 
 ## What is the same as local, and what is not
 
-`test/same_as_local_test.dart` runs eleven scenarios three ways: both actors in one system, on two nodes of the in-memory network, and on two nodes over TCP. They cover tell and reply, ask from outside and inside a handler, ask to a dead actor, watch (normal stop, failure, already dead), and link (failure with a supervised partner, trapped exit, normal stop, already dead, unlink). The observed behaviour is the same in all three, apart from these differences:
+`test/same_as_local_test.dart` runs eleven scenarios three ways: both actors in one system, on two nodes of the in-memory network, and on two nodes over TCP. `dactor_libp2p` runs the same ones (they live in `test/support/transport_scenarios.dart`) over libp2p. They cover tell and reply, ask from outside and inside a handler, ask to a dead actor, watch (normal stop, failure, already dead), and link (failure with a supervised partner, trapped exit, normal stop, already dead, unlink). The observed behaviour is the same in all three, apart from these differences:
 
 | | Local | Remote |
 |---|---|---|
@@ -73,7 +73,7 @@ A `Transport` carries frames between named nodes and reports connections made an
 | `InMemoryNetwork` | Nodes in one isolate, with latency, jitter, `partition`, `heal` and `isolate`. Runs on timers, so inside `simulate` and `explore` from `package:dactor/simulation.dart` the whole network is on virtual time and replays from the seed. `Simulation.addSystem()` gives each node its own actor system. |
 | `TcpTransport` (`package:dactor_remote/tcp.dart`) | Plain TCP. **No authentication, no encryption.** For one machine, a fully trusted network, and tests. |
 
-A libp2p transport, which would give authenticated peers, encryption and NAT traversal, is not written yet.
+`Libp2pTransport`, in the separate package [`dactor_libp2p`](../dactor_libp2p/README.md), gives authenticated peers, encryption, relays and NAT traversal. It is a package of its own so that this one does not depend on libp2p.
 
 ## Remote spawn
 
@@ -93,4 +93,4 @@ Loopback TCP, both nodes in one process (`tool/throughput.dart`): about 89k one-
 
 ## Not here yet
 
-A libp2p transport; node heartbeats (a silent, still-open connection is not detected); cluster membership; a registry of names or process groups across nodes; end-to-end encryption; generated codecs; `unwatch`.
+Node heartbeats in this package (a silent, still-open connection is not detected over TCP; over libp2p the muxer's keep-alive detects it); cluster membership; a registry of names or process groups across nodes; end-to-end encryption; generated codecs; `unwatch`.

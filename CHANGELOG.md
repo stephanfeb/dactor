@@ -214,6 +214,18 @@ Phase 5, first part: remote references (in `packages/dactor_remote`).
   capability tokens, remote spawn by behaviour name, an in-memory network
   that runs under the simulator, and a plain TCP transport.
 
+Phase 5, second part: a libp2p transport (in `packages/dactor_libp2p`).
+
+- New package `packages/dactor_libp2p` (not published): `Libp2pTransport`
+  over a dart_libp2p `Host`. Nodes are named by peer id; Noise
+  authenticates them and encrypts traffic, capability tokens included.
+  Nodes behind a NAT are reached through circuit relays. `startHost`
+  builds a host with UDX, Noise and Yamux, with a relay role and keep-alive
+  settings.
+- The eleven same-as-local scenarios moved to
+  `packages/dactor_remote/test/support/transport_scenarios.dart`, so every
+  transport runs the same ones.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

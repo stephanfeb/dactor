@@ -522,7 +522,7 @@ Limits: an isolate blocked inside a native call (synchronous I/O, FFI, `sleep`) 
 
 ## 🌐 Actors on Other Nodes
 
-`packages/dactor_remote` (experimental, not published) makes an actor on another node an ordinary `ActorRef`: `tell`, `ask`, `watch` and `context.link` work across nodes, a lost connection is reported as `NoConnectionExit`, and a node only accepts messages from peers that hold a reference to the actor. It comes with an in-memory network that runs under the simulator and a plain TCP transport for one machine. See its [README](packages/dactor_remote/README.md).
+`packages/dactor_remote` (experimental, not published) makes an actor on another node an ordinary `ActorRef`: `tell`, `ask`, `watch` and `context.link` work across nodes, a lost connection is reported as `NoConnectionExit`, and a node only accepts messages from peers that hold a reference to the actor. It comes with an in-memory network that runs under the simulator and a plain TCP transport for one machine. See its [README](packages/dactor_remote/README.md). `packages/dactor_libp2p` adds a libp2p transport: authenticated, encrypted, and able to reach a node behind a NAT through a relay ([README](packages/dactor_libp2p/README.md)).
 
 ## ⚡ Actor Pooling for Scalability
 
