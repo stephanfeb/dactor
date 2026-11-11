@@ -29,6 +29,11 @@ abstract class ActorSystem {
   /// Stops the specified actor.
   Future<void> stop(ActorRef actor);
 
+  /// Stops [actor] and its children at once, without waiting for handlers
+  /// that are still running. Code the actor has suspended on an `await` never
+  /// resumes. `postStop` still runs.
+  void kill(ActorRef actor);
+
   /// Retrieves an actor by its ID.
   ActorRef? getActor(String id);
 
@@ -87,6 +92,11 @@ class ActorSystemConfig {
   /// actor's id. Defaults to 10 ms.
   final Duration? blockingHandlerThreshold;
 
+  /// How long a graceful stop or restart waits for the handler an actor is
+  /// in the middle of. After that the actor is killed: the handler is cut off
+  /// at the `await` it is suspended on. Defaults to 5 seconds.
+  final Duration? stopTimeout;
+
   ActorSystemConfig({
     this.metricsCollector,
     this.traceCollector,
@@ -96,6 +106,7 @@ class ActorSystemConfig {
     this.maxMessagesPerTurn,
     this.maxTurnDuration,
     this.blockingHandlerThreshold,
+    this.stopTimeout,
   }) : askConfig = askConfig ?? AskConfig();
 
   /// Creates a development-friendly configuration with longer timeouts and more retries.

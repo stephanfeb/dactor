@@ -18,7 +18,7 @@ Dactor provides a robust actor system for building concurrent, fault-tolerant, a
 - ⚡ **High Performance**: >29K messages/sec throughput, <1ms latency
 - 📊 **Built-in Observability**: Comprehensive metrics, tracing, and monitoring
 - 🎛️ **Actor Pooling**: Scale with worker pools and round-robin routing
-- 💾 **Memory Efficient**: <1KB overhead per actor
+- 💾 **Memory Efficient**: about 1.7 KB per idle actor
 - 🔍 **Dead Letter Queue**: Handle undeliverable messages gracefully
 - 🚀 **Pure Dart**: no platform channels or native code; the only runtime dependencies are `uuid` and `meta`
 
@@ -282,6 +282,26 @@ final strategy = AllForOneStrategy(
 - Restarting an actor also stops its children. Create children in `preStart` if they should come back with the supervisor.
 - A top-level actor is governed by the `supervision:` strategy passed to `spawn`. Without one, it is stopped on its first failure.
 - If `preStart` throws, `spawn` fails and the actor is not registered.
+
+### Actor Isolation, Stop and Kill
+
+Each actor runs in its own zone. Two things follow.
+
+**Errors nothing caught belong to the actor.** A future the actor did not await, or a timer or stream callback it set up, can throw long after the handler returned. That error is treated as the actor failing, and goes to its supervisor like any other failure. It does not reach your application's top-level error handler.
+
+**Nothing outlives the actor.** When an actor stops or restarts, everything the old instance left pending is dropped: timers are cancelled, and code suspended on an `await` never resumes.
+
+```dart
+await system.stop(ref);  // graceful
+system.kill(ref);        // immediate
+```
+
+- `stop` delivers no further messages, waits for the handler in flight to finish (up to `ActorSystemConfig.stopTimeout`, 5 seconds by default), stops the children, then runs `postStop`. If the handler does not finish in time, the actor is killed.
+- `kill` does not wait. Children are killed too, and `postStop` still runs.
+- A killed handler is cut off at the `await` it is suspended on. **`finally` blocks around that `await` do not run**, so release sockets, files and subscriptions in `postStop`.
+- An actor that stops itself (`context.system.stop(context.self)`) is cut off at that call: code after it does not run.
+
+Limits: a handler in a synchronous loop cannot be interrupted, and work an actor starts through `Zone.root.run` is outside its zone.
 
 ## ⚡ Actor Pooling for Scalability
 
@@ -923,7 +943,7 @@ Dactor is designed for high performance:
 
 - **Throughput**: >29,000 messages/second
 - **Latency**: <112μs average message processing
-- **Memory**: <1KB overhead per idle actor
+- **Memory**: about 1.7 KB per idle actor
 - **Scalability**: Supports thousands of concurrent actors
 
 Run the benchmarks:

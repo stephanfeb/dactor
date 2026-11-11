@@ -5,6 +5,7 @@ import 'package:meta/meta.dart';
 
 import 'package:dactor/src/actor.dart';
 import 'package:dactor/src/actor_ref.dart';
+import 'package:dactor/src/actor_zone.dart';
 import 'package:dactor/src/actor_system.dart';
 import 'package:dactor/src/local_actor_ref.dart';
 import 'package:dactor/src/local_message.dart';
@@ -22,11 +23,54 @@ import 'package:dactor/src/event_bus.dart';
 import 'package:dactor/src/timer_scheduler.dart';
 import 'package:dactor/src/dactor_timer_scheduler.dart';
 
+/// One run of an actor: the [Actor] instance a factory produced, and the zone
+/// all of its code runs in. A restart retires one incarnation and starts the
+/// next.
+class _Incarnation extends TombstoneZone {
+  final LocalActorSystem system;
+  final String id;
+  final Actor actor;
+
+  /// `preStart` completed, so this incarnation is owed a `postStop`.
+  bool preStarted = false;
+  bool postStopped = false;
+
+  /// A handler threw (or an error escaped the zone) and supervision has not
+  /// yet decided what to do.
+  bool failed = false;
+
+  /// A stop or restart has claimed this incarnation.
+  bool retiring = false;
+
+  /// `preStart` or a message handler is in progress.
+  bool busy = false;
+
+  /// Settles the bookkeeping of the handler in flight. Called when the zone
+  /// is killed, because that handler's future will then never complete.
+  void Function()? abandon;
+
+  Completer<void>? _idle;
+
+  _Incarnation(this.system, this.id, this.actor) : super(system._systemZone);
+
+  @override
+  void onUncaughtError(Object error, StackTrace stackTrace) =>
+      system._onZoneError(this, error, stackTrace);
+
+  Future<void> get idle => (_idle ??= Completer<void>()).future;
+
+  void markIdle() {
+    busy = false;
+    _idle?.complete();
+    _idle = null;
+  }
+}
+
 /// Everything the system knows about one actor *cell*: the identity that
-/// survives restarts (mailbox, factory, strategy) plus the current [actor]
+/// survives restarts (mailbox, factory, strategy) plus the current
 /// incarnation, which a restart replaces.
 class _ActorInfo {
-  Actor actor;
+  _Incarnation inc;
   final Actor Function() factory;
   final SupervisionStrategy? supervision;
   final Mailbox mailbox;
@@ -41,6 +85,10 @@ class _ActorInfo {
   /// actor that has not finished initialising.
   bool started = false;
 
+  /// True while the current incarnation has failed and its supervisor is
+  /// still deciding. The pump delivers nothing in the meantime.
+  bool suspended = false;
+
   /// Ids of the actors this one supervises, in start order. Stopping or
   /// restarting this actor stops them first, last-started first.
   final children = <String>{};
@@ -53,8 +101,13 @@ class _ActorInfo {
   /// Set once teardown has begun; a second stop waits on the first.
   Future<void>? stopping;
 
-  _ActorInfo(this.actor, this.factory, this.supervision, this.mailbox,
+  /// Set while a restart is in progress; a second restart joins the first.
+  Future<void>? restarting;
+
+  _ActorInfo(this.inc, this.factory, this.supervision, this.mailbox,
       {this.parentId});
+
+  Actor get actor => inc.actor;
 }
 
 class LocalActorSystem implements ActorSystem {
@@ -74,6 +127,14 @@ class LocalActorSystem implements ActorSystem {
 
   /// Configuration for ask pattern behavior.
   final AskConfig askConfig;
+
+  /// The zone the system was created in. The pump and all lifecycle work run
+  /// here, and every actor zone is forked from it, so killing one actor's
+  /// zone can never cut short the system's own bookkeeping or another actor.
+  final Zone _systemZone = Zone.current;
+
+  /// How long a stop or restart waits for a handler in flight.
+  final Duration _stopTimeout;
 
   bool _isShutdown = false;
   Completer<void> _pumpSignal = Completer<void>();
@@ -99,6 +160,7 @@ class LocalActorSystem implements ActorSystem {
         tracer = config?.traceCollector ?? const NoOpTraceCollector(),
         logger = config?.logCollector ?? ConsoleLogCollector(),
         askConfig = config?.askConfig ?? AskConfig(),
+        _stopTimeout = config?.stopTimeout ?? const Duration(seconds: 5),
         _maxMessagesPerTurn = config?.maxMessagesPerTurn ?? 128,
         _maxTurnMicros =
             (config?.maxTurnDuration ?? const Duration(milliseconds: 4))
@@ -118,23 +180,81 @@ class LocalActorSystem implements ActorSystem {
   @override
   Stream<EventBusEvent> get events => _eventBus.events;
 
+  /// Runs synchronous lifecycle work in the system zone.
+  R _sys<R>(R Function() f) =>
+      identical(Zone.current, _systemZone) ? f() : _systemZone.run(f);
+
+  /// Runs asynchronous lifecycle work in the system zone on behalf of a
+  /// caller in another zone.
+  ///
+  /// Actors call spawn, stop and restart from inside their own zones. If the
+  /// awaits inside those operations were bound to the caller's zone, killing
+  /// the caller would strand them halfway, so the work runs here.
+  ///
+  /// The result is handed back through a completer created in the caller's
+  /// zone. That matters for errors: Dart does not deliver a future's error to
+  /// a listener in a different error zone, so awaiting the system-zone future
+  /// directly from an actor would hang on failure.
+  Future<T> _sysAsync<T>(Future<T> Function() f) {
+    if (identical(Zone.current, _systemZone)) {
+      return f();
+    }
+    final completer = Completer<T>();
+    _systemZone.run(() {
+      try {
+        f().then(completer.complete, onError: completer.completeError);
+      } catch (e, s) {
+        completer.completeError(e, s);
+      }
+    });
+    return completer.future;
+  }
+
+  /// Runs [body] in [inc]'s zone.
+  ///
+  /// A synchronous [body] returns (or throws) directly. An asynchronous one
+  /// is handed back as a future that belongs to the system zone, for the same
+  /// reason as [_sysAsync] in the other direction. If the zone is killed
+  /// first, that future never completes; race it against
+  /// [TombstoneZone.killed].
+  FutureOr<T> _inActor<T>(_Incarnation inc, FutureOr<T> Function() body) {
+    Completer<T>? completer;
+    final result = inc.run<FutureOr<T>>(() {
+      final result = body();
+      if (result is Future<T>) {
+        // Created in the system zone on purpose: a future delivers its
+        // error only to listeners in the error zone it was created in.
+        final Completer<T> bridge = _systemZone.run(() => Completer<T>());
+        completer = bridge;
+        result.then(bridge.complete, onError: bridge.completeError);
+      }
+      return result;
+    });
+    return completer?.future ?? result;
+  }
+
+  /// The incarnation whose code is running right now, if any.
+  _Incarnation? get _caller {
+    final zone = Zone.current;
+    if (identical(zone, _systemZone)) return null;
+    final owner = TombstoneZone.of(zone);
+    return owner is _Incarnation && identical(owner.system, this)
+        ? owner
+        : null;
+  }
+
   @override
   Future<ActorRef> spawn<T extends Actor>(
     String id,
     T Function() actorFactory, {
     SupervisionStrategy? supervision,
     Pool? pool,
-  }) async {
-    if (pool != null) {
-      return (await spawnAndGetActor(
-        id,
-        () => RouterActor(pool, actorFactory),
-        supervision: supervision,
-      ))
-          .ref;
-    }
-    return (await spawnAndGetActor(id, actorFactory, supervision: supervision))
-        .ref;
+  }) {
+    return spawnAndGetActor(
+      id,
+      pool != null ? () => RouterActor(pool, actorFactory) : actorFactory,
+      supervision: supervision,
+    ).then((spawned) => spawned.ref);
   }
 
   Future<({ActorRef ref, Actor actor})> spawnAndGetActor<T extends Actor>(
@@ -142,7 +262,7 @@ class LocalActorSystem implements ActorSystem {
     T Function() actorFactory, {
     SupervisionStrategy? supervision,
   }) {
-    return _spawn(id, actorFactory, supervision: supervision);
+    return _sysAsync(() => _spawn(id, actorFactory, supervision: supervision));
   }
 
   /// Spawns `'$parentId/$childId'` as a supervised child of [parentId].
@@ -155,19 +275,21 @@ class LocalActorSystem implements ActorSystem {
     String childId,
     Actor Function() actorFactory, {
     SupervisionStrategy? supervision,
-  }) async {
-    if (childId.isEmpty || childId.contains('/')) {
-      throw ArgumentError.value(
-          childId, 'childId', 'must be a non-empty single path segment');
-    }
-    final parent = _actorInfo[parentId];
-    if (parent == null || parent.actor is! Supervisor) {
-      throw ArgumentError.value(
-          parentId, 'parentId', 'is not a live Supervisor');
-    }
-    final spawned = await _spawn('$parentId/$childId', actorFactory,
-        supervision: supervision, parentId: parentId);
-    return spawned.ref;
+  }) {
+    return _sysAsync(() async {
+      if (childId.isEmpty || childId.contains('/')) {
+        throw ArgumentError.value(
+            childId, 'childId', 'must be a non-empty single path segment');
+      }
+      final parent = _actorInfo[parentId];
+      if (parent == null || parent.actor is! Supervisor) {
+        throw ArgumentError.value(
+            parentId, 'parentId', 'is not a live Supervisor');
+      }
+      final spawned = await _spawn('$parentId/$childId', actorFactory,
+          supervision: supervision, parentId: parentId);
+      return spawned.ref;
+    });
   }
 
   /// The live children of the actor with [id], in start order.
@@ -201,7 +323,8 @@ class LocalActorSystem implements ActorSystem {
     final mailbox = Mailbox(id, scheduleMailbox, onGauge: metrics.gauge);
     final actorRef =
         LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
-    final info = _ActorInfo(actor, actorFactory, supervision, mailbox,
+    final info = _ActorInfo(
+        _newIncarnation(id, actor), actorFactory, supervision, mailbox,
         parentId: parentId);
 
     _actors[id] = actorRef;
@@ -228,30 +351,60 @@ class LocalActorSystem implements ActorSystem {
     return (ref: actorRef, actor: actor);
   }
 
-  /// Wires a fresh context into [info.actor], runs its `preStart`, and only
-  /// then opens the mailbox for processing.
+  _Incarnation _newIncarnation(String id, Actor actor) =>
+      _Incarnation(this, id, actor);
+
+  /// An error nothing caught surfaced in an actor's zone: an unawaited future
+  /// failed, or a timer or stream callback threw. It counts as that actor
+  /// failing, exactly as if a message handler had thrown.
+  void _onZoneError(_Incarnation inc, Object error, StackTrace stackTrace) {
+    final info = _actorInfo[inc.id];
+    final actorRef = _actors[inc.id];
+    if (info == null || actorRef == null || !identical(info.inc, inc)) {
+      return;
+    }
+    _systemZone.run(() {
+      _fail(info, actorRef, inc, error, stackTrace);
+    });
+  }
+
+  /// Wires a fresh context into the current incarnation, runs its `preStart`
+  /// inside its zone, and only then opens the mailbox for processing.
   Future<void> _startIncarnation(
       _ActorInfo info, LocalActorRef actorRef) async {
-    final actor = info.actor;
-    actor.context = _ActorContext(actorRef, this);
-    await actor.preStart();
-    if (!_isCurrent(info, actor)) {
-      // Stopped or replaced while preStart was still running. This
-      // incarnation did start, so it is owed its postStop.
-      _disposeTimers(actor);
-      _runPostStop(actor, actorRef.id);
+    final inc = info.inc;
+    inc.actor.context = _ActorContext(actorRef, this);
+    inc.busy = true;
+    try {
+      final starting = _inActor<void>(inc, () => inc.actor.preStart());
+      if (starting is Future<void>) {
+        // If the zone is killed, preStart's future never completes.
+        await Future.any([starting, inc.killed]);
+      }
+    } finally {
+      inc.markIdle();
+    }
+    if (inc.isDead) {
+      return;
+    }
+    inc.preStarted = true;
+    if (inc.retiring || !_isCurrent(info, inc)) {
+      // A stop or restart arrived while preStart was running and has been
+      // waiting for it; that operation runs postStop.
       return;
     }
     info.started = true;
+    info.suspended = false;
     if (!info.mailbox.isEmpty) {
       scheduleMailbox(info.mailbox);
     }
   }
 
-  /// True while [actor] is the running incarnation of the cell [info].
-  bool _isCurrent(_ActorInfo info, Actor actor) =>
-      identical(_actorInfo[actor.context.self.id], info) &&
-      identical(info.actor, actor);
+  /// True while [inc] is the running incarnation of the registered cell
+  /// [info].
+  bool _isCurrent(_ActorInfo info, _Incarnation inc) =>
+      identical(_actorInfo[info.mailbox.actorId], info) &&
+      identical(info.inc, inc);
 
   void _disposeTimers(Actor actor) {
     final timers = actor.context.timers;
@@ -260,15 +413,41 @@ class LocalActorSystem implements ActorSystem {
     }
   }
 
-  /// Runs `postStop`, containing anything it throws so that one bad hook
-  /// cannot abort a stop, a restart or a shutdown.
-  void _runPostStop(Actor actor, String id) {
-    try {
-      actor.postStop();
-    } catch (e) {
-      metrics.increment('actors.post_stop_failed', tags: {'actorId': id});
-      logger.record(LogRecord(LogLevel.error, 'postStop of $id threw: $e'));
+  /// Ends [inc]: runs `postStop` if it is owed one, then switches its zone
+  /// off so that nothing it left behind can run. Idempotent.
+  void _finishRetire(_Incarnation inc, String id) {
+    inc.retiring = true;
+    _disposeTimers(inc.actor);
+    if (inc.preStarted && !inc.postStopped && !inc.isDead) {
+      inc.postStopped = true;
+      try {
+        inc.run(() => inc.actor.postStop());
+      } catch (e) {
+        // One bad hook must not abort a stop, a restart or a shutdown.
+        metrics.increment('actors.post_stop_failed', tags: {'actorId': id});
+        logger.record(LogRecord(LogLevel.error, 'postStop of $id threw: $e'));
+      }
     }
+    inc.kill();
+    inc.abandon?.call();
+  }
+
+  /// Whether a graceful stop or restart should wait for [inc] to finish what
+  /// it is doing. It does not wait for a handler that has already failed, nor
+  /// for the handler that is itself asking for the stop.
+  bool _mustWait(_Incarnation inc, _Incarnation? requester) =>
+      inc.busy && !inc.failed && !identical(inc, requester);
+
+  /// Waits for [inc] to finish `preStart` or the handler in flight, for at
+  /// most [_stopTimeout].
+  Future<void> _awaitIdle(_Incarnation inc, String id) {
+    return inc.idle.timeout(_stopTimeout, onTimeout: () {
+      metrics.increment('actors.stop_timed_out', tags: {'actorId': id});
+      logger.record(LogRecord(
+          LogLevel.warning,
+          '$id did not finish its current handler within '
+          '${_stopTimeout.inMilliseconds} ms and was killed'));
+    });
   }
 
   /// Dispatches messages until shutdown.
@@ -292,8 +471,8 @@ class LocalActorSystem implements ActorSystem {
       }
 
       final info = _actorInfo[mailbox.actorId];
-      if (info == null || !info.started) {
-        // Not (yet) runnable; _startIncarnation reschedules once ready.
+      if (info == null || !info.started || info.suspended) {
+        // Not runnable right now; whoever makes it runnable reschedules.
         continue;
       }
 
@@ -307,11 +486,11 @@ class LocalActorSystem implements ActorSystem {
       _openTurn();
       final before = _turnClock.elapsedMicroseconds;
       _processingActors.add(mailbox.actorId);
-      _processMessageAsync(info, actorRef, message);
+      _processMessage(info, actorRef, message);
       final after = _turnClock.elapsedMicroseconds;
 
-      // _processMessageAsync returns at the handler's first suspension, so
-      // this is the time the handler held the isolate without yielding.
+      // _processMessage returns at the handler's first suspension, so this
+      // is the time the handler held the isolate without yielding.
       if (after - before > _blockingHandlerMicros) {
         metrics.increment('actors.blocking_handler',
             tags: {'actorId': mailbox.actorId});
@@ -339,62 +518,67 @@ class LocalActorSystem implements ActorSystem {
     Timer.run(() => _turnOpen = false);
   }
 
-  /// Processes a single message asynchronously without blocking the message pump.
-  /// This allows actors to use natural await syntax (like await ask()) without
-  /// causing deadlocks in the single-threaded message pump.
-  void _processMessageAsync(
+  /// Hands one message to the actor, inside the actor's zone, without
+  /// blocking the pump: the handler may `await` (an `ask`, for instance) and
+  /// other actors keep running meanwhile.
+  ///
+  /// The handler's future is observed from the system zone. If the actor is
+  /// killed that future never completes, so the kill settles the bookkeeping
+  /// through [_Incarnation.abandon] instead.
+  void _processMessage(
       _ActorInfo info, LocalActorRef actorRef, Message message) {
     final stopwatch = Stopwatch()..start();
     // Pin the incarnation that handles this message; a restart during the
     // handler must not redirect the bookkeeping below to the replacement.
-    final actor = info.actor;
+    final inc = info.inc;
+    final actor = inc.actor;
     final mailbox = info.mailbox;
+    final context = actor.context as _ActorContext;
 
-    () async {
-      try {
-        if (message is LocalMessage) {
-          (actor.context as _ActorContext).sender = message.sender;
-          tracer.record(TraceEvent(
-              message.correlationId, 'processed', actorRef, message.payload));
-          await actor.onMessage(message.payload);
-        } else {
-          await actor.onMessage(message);
-        }
-      } catch (e, s) {
-        metrics.increment('actors.failed');
-        try {
-          actor.onError(e, s);
-        } catch (_) {
-          // The hook is informational; supervision decides what happens.
-        }
-        try {
-          await _handleFailure(info, actorRef, actor, e, s);
-        } catch (supervisionError) {
-          // Supervision itself failed (for example the replacement's
-          // preStart threw). This closure is not awaited by anyone, so an
-          // escaping error would be an unhandled zone error; contain it and
-          // give up on the child.
-          metrics.increment('actors.supervision_failed',
-              tags: {'actorId': actorRef.id});
-          logger.record(LogRecord(
-              LogLevel.error,
-              'Supervision of ${actorRef.id} failed after $e: '
-              '$supervisionError',
-              actor: actorRef));
-          await stop(actorRef);
-        }
-      } finally {
-        stopwatch.stop();
-        metrics.timing('messages.processing_time', stopwatch.elapsed);
-        (actor.context as _ActorContext).sender = null;
-
-        _processingActors.remove(mailbox.actorId);
-
-        if (!mailbox.isEmpty && !mailbox.isDisposed) {
-          scheduleMailbox(mailbox);
-        }
+    var finished = false;
+    void finish() {
+      if (finished) return;
+      finished = true;
+      inc.abandon = null;
+      stopwatch.stop();
+      metrics.timing('messages.processing_time', stopwatch.elapsed);
+      context.sender = null;
+      _processingActors.remove(mailbox.actorId);
+      inc.markIdle();
+      if (!mailbox.isEmpty && !mailbox.isDisposed) {
+        scheduleMailbox(mailbox);
       }
-    }();
+    }
+
+    void failed(Object error, StackTrace stackTrace) {
+      _fail(info, actorRef, inc, error, stackTrace).whenComplete(finish);
+    }
+
+    inc.busy = true;
+    inc.abandon = finish;
+
+    final Object? payload;
+    if (message is LocalMessage) {
+      context.sender = message.sender;
+      tracer.record(TraceEvent(
+          message.correlationId, 'processed', actorRef, message.payload));
+      payload = message.payload;
+    } else {
+      payload = message;
+    }
+
+    // The outcome is observed from inside the actor's zone, because a
+    // listener outside it would never be told about an error, and then
+    // carried back to the system zone, where the bookkeeping lives.
+    try {
+      inc.run(() {
+        actor.onMessage(payload).then((_) => _systemZone.run(finish),
+            onError: (Object e, StackTrace s) =>
+                _systemZone.run(() => failed(e, s)));
+      });
+    } catch (e, s) {
+      failed(e, s);
+    }
   }
 
   void scheduleMailbox(Mailbox mailbox) {
@@ -418,8 +602,51 @@ class LocalActorSystem implements ActorSystem {
     await _pumpSignal.future;
   }
 
-  /// Decides what happens to [failed], the incarnation of [info] whose
-  /// handler threw.
+  /// Records that [inc] failed with [error] and sees supervision through.
+  ///
+  /// Reached two ways: a message handler threw, or an error escaped the
+  /// actor's zone. Only the first failure of an incarnation counts; while its
+  /// supervisor decides, the actor receives nothing. Never throws.
+  Future<void> _fail(_ActorInfo info, LocalActorRef actorRef, _Incarnation inc,
+      Object error, StackTrace stackTrace) async {
+    if (inc.failed || inc.retiring || inc.isDead || !_isCurrent(info, inc)) {
+      return;
+    }
+    inc.failed = true;
+    info.suspended = true;
+    metrics.increment('actors.failed');
+    try {
+      inc.run(() => inc.actor.onError(error, stackTrace));
+    } catch (_) {
+      // The hook is informational; supervision decides what happens.
+    }
+    try {
+      await _handleFailure(info, actorRef, inc, error, stackTrace);
+    } catch (supervisionError) {
+      // Supervision itself failed (for example the replacement's preStart
+      // threw). Nobody awaits this, so contain it and give up on the child.
+      metrics.increment('actors.supervision_failed',
+          tags: {'actorId': actorRef.id});
+      logger.record(LogRecord(
+          LogLevel.error,
+          'Supervision of ${actorRef.id} failed after $error: '
+          '$supervisionError',
+          actor: actorRef));
+      try {
+        await _stopActor(actorRef);
+      } catch (_) {}
+    }
+    if (_isCurrent(info, inc) && !inc.retiring) {
+      // Resumed: same incarnation, same state, next message.
+      inc.failed = false;
+      info.suspended = false;
+      if (!info.mailbox.isEmpty) {
+        scheduleMailbox(info.mailbox);
+      }
+    }
+  }
+
+  /// Decides what happens to [failed], the incarnation of [info] that failed.
   ///
   /// A supervised actor is handed to its parent's `onChildFailure`. If the
   /// parent answers [SupervisionDecision.escalate], the parent is treated as
@@ -427,7 +654,7 @@ class LocalActorSystem implements ActorSystem {
   /// A top-level actor is governed by the strategy it was spawned with, and
   /// is stopped if it has none or if the failure escalates past the top.
   Future<void> _handleFailure(_ActorInfo info, LocalActorRef actorRef,
-      Actor failed, Object error, StackTrace stackTrace) async {
+      _Incarnation failed, Object error, StackTrace stackTrace) async {
     final parentId = info.parentId;
     final parentInfo = parentId == null ? null : _actorInfo[parentId];
 
@@ -441,21 +668,30 @@ class LocalActorSystem implements ActorSystem {
         if (previous != null) await previous;
         // An earlier decision (all-for-one, a cascade) may already have
         // replaced or stopped this incarnation.
-        if (!_isCurrent(info, failed)) return;
-        final parent = parentInfo.actor;
+        if (!_isCurrent(info, failed) || failed.retiring) return;
+        final parentInc = parentInfo.inc;
+        final parent = parentInc.actor;
         final parentRef = _actors[parentId];
         if (parent is! Supervisor ||
             parentRef == null ||
+            parentInc.isDead ||
             !identical(_actorInfo[parentId], parentInfo)) {
-          await stop(actorRef);
+          await _stopActor(actorRef);
           return;
         }
-        final decision =
-            await parent.onChildFailure(actorRef, error, stackTrace);
+        // The decision is the supervisor's code, so it runs in the
+        // supervisor's zone. If the supervisor dies meanwhile, its children
+        // go with it and this never needs an answer.
+        final deciding = _inActor<SupervisionDecision>(parentInc,
+            () => parent.onChildFailure(actorRef, error, stackTrace));
+        final decision = deciding is Future<SupervisionDecision>
+            ? await Future.any<SupervisionDecision?>(
+                [deciding, parentInc.killed.then((_) => null)])
+            : deciding;
         if (decision == SupervisionDecision.escalate) {
           metrics.increment('actors.escalated', tags: {'actorId': actorRef.id});
           await _handleFailure(
-              parentInfo, parentRef, parent, error, stackTrace);
+              parentInfo, parentRef, parentInc, error, stackTrace);
         }
       } finally {
         done.complete();
@@ -475,48 +711,62 @@ class LocalActorSystem implements ActorSystem {
       case SupervisionDecision.stop:
       case SupervisionDecision.escalate:
         // Nothing sits above a top-level actor, so escalating stops it.
-        await stop(actorRef);
+        await _stopActor(actorRef);
     }
+  }
+
+  /// [ActorContext.restart], called from inside an actor's zone.
+  Future<void> _restartFrom(String id) {
+    final requester = _caller;
+    return _sysAsync(() => _restartActor(id, requester: requester));
   }
 
   /// Restarts the actor with [id] in place.
   ///
   /// The [LocalActorRef], its mailbox (including every pending message),
-  /// watchers and event-bus subscriptions are kept. Only the [Actor] instance
-  /// is replaced: `postStop` runs on the old incarnation, its timers are
-  /// cancelled, and `preStart` runs on the new one before any further message
-  /// is delivered. The message that triggered the failure is not redelivered.
+  /// watchers and event-bus subscriptions are kept. Only the incarnation is
+  /// replaced: the old one is allowed to finish the handler it is in (see
+  /// [_mustWait]), its `postStop` runs, its zone is switched off, and
+  /// `preStart` runs on the new one before any further message is delivered.
+  /// The message that triggered the failure is not redelivered.
   ///
   /// Children do not survive: they are stopped before the old incarnation's
   /// `postStop`, and the new incarnation starts with none. A supervisor that
   /// wants its children back creates them in `preStart`.
-  Future<void> _restartActor(String id) async {
-    if (_isShutdown) {
-      return;
-    }
+  Future<void> _restartActor(String id, {_Incarnation? requester}) {
     final actorRef = _actors[id];
     final info = _actorInfo[id];
-    if (actorRef == null || info == null || info.stopping != null) {
-      return;
+    if (_isShutdown ||
+        actorRef == null ||
+        info == null ||
+        info.stopping != null) {
+      return Future<void>.value();
     }
+    return info.restarting ??= _doRestart(actorRef, info, requester)
+        .whenComplete(() => info.restarting = null);
+  }
+
+  Future<void> _doRestart(
+      LocalActorRef actorRef, _ActorInfo info, _Incarnation? requester) async {
+    final id = actorRef.id;
     metrics.increment('actors.restarted', tags: {'actorId': id});
 
-    final wasStarted = info.started;
     info.started = false;
-    final old = info.actor;
-    if (info.children.isNotEmpty) {
-      await _stopChildren(info);
-      if (!_isCurrent(info, old)) return;
+    final old = info.inc;
+    old.retiring = true;
+    if (_mustWait(old, requester)) {
+      await _awaitIdle(old, id);
     }
-    _disposeTimers(old);
-    if (wasStarted) {
-      // An incarnation still inside preStart gets its postStop from
-      // _startIncarnation, once it notices it has been replaced.
-      _runPostStop(old, id);
+    if (info.children.isNotEmpty) {
+      await _stopChildren(info, requester);
+    }
+    _finishRetire(old, id);
+    if (info.stopping != null || !identical(_actorInfo[id], info)) {
+      return;
     }
 
-    info.actor = info.factory();
     try {
+      info.inc = _newIncarnation(id, info.factory());
       await _startIncarnation(info, actorRef);
     } catch (e) {
       // The replacement could not initialise; there is nothing left to run.
@@ -527,20 +777,65 @@ class LocalActorSystem implements ActorSystem {
     }
   }
 
+  /// Stops [actor] gracefully.
+  ///
+  /// The actor receives no further messages. A handler already in flight is
+  /// given [ActorSystemConfig.stopTimeout] to finish; then the actor's
+  /// children are stopped, its `postStop` runs, and its zone is switched off,
+  /// which drops anything it left pending (timers, unawaited futures, a
+  /// handler that did not finish in time).
+  ///
+  /// An actor that stops itself is not waited for: its handler is cut off at
+  /// its next `await`.
   @override
-  Future<void> stop(ActorRef actor) async {
+  Future<void> stop(ActorRef actor) {
+    if (_isShutdown) {
+      return Future<void>.value();
+    }
+    final requester = _caller;
+    return _sysAsync(() => _stopActor(actor, requester: requester));
+  }
+
+  /// Stops [actor] and its children immediately, without waiting for
+  /// handlers in flight.
+  ///
+  /// `postStop` still runs, because it is the only place an actor can release
+  /// what it holds: `finally` blocks around a pending `await` do not run in a
+  /// killed actor.
+  @override
+  void kill(ActorRef actor) {
     if (_isShutdown) {
       return;
     }
-    await _stopActor(actor);
+    final actorRef = _actors[actor.id];
+    final info = _actorInfo[actor.id];
+    if (actorRef == null || info == null) {
+      return;
+    }
+    metrics.increment('actors.killed', tags: {'actorId': actor.id});
+    _sys(() => _killTree(actorRef, info));
+  }
+
+  void _killTree(LocalActorRef actorRef, _ActorInfo info) {
+    info.started = false;
+    for (final childId in info.children.toList().reversed) {
+      final child = _actors[childId];
+      final childInfo = _actorInfo[childId];
+      if (child != null && childInfo != null) {
+        _killTree(child, childInfo);
+      }
+    }
+    info.children.clear();
+    _finishRetire(info.inc, actorRef.id);
+    _finishStop(actorRef, info);
   }
 
   /// Stops every child of [info], last-started first.
-  Future<void> _stopChildren(_ActorInfo info) async {
+  Future<void> _stopChildren(_ActorInfo info, _Incarnation? requester) async {
     for (final childId in info.children.toList().reversed) {
       final child = _actors[childId];
       if (child != null) {
-        await _stopActor(child);
+        await _stopActor(child, requester: requester);
       }
     }
     info.children.clear();
@@ -550,9 +845,7 @@ class LocalActorSystem implements ActorSystem {
   ///
   /// [stop] refuses work once shutdown has begun, but [shutdown] itself must
   /// still be able to tear every actor down, so it calls this directly.
-  ///
-  /// The actor's children are stopped first, then its own `postStop` runs.
-  Future<void> _stopActor(ActorRef actor) {
+  Future<void> _stopActor(ActorRef actor, {_Incarnation? requester}) {
     final actorRef = _actors[actor.id];
     if (actorRef is! LocalActorRef) {
       metrics.increment('actors.stop_failed');
@@ -565,25 +858,33 @@ class LocalActorSystem implements ActorSystem {
       _finishStop(actorRef, null);
       return Future<void>.value();
     }
-    return info.stopping ??= _tearDown(actorRef, info);
+    return info.stopping ??= _tearDown(actorRef, info, requester);
   }
 
-  Future<void> _tearDown(LocalActorRef actorRef, _ActorInfo info) async {
-    final wasStarted = info.started;
+  Future<void> _tearDown(
+      LocalActorRef actorRef, _ActorInfo info, _Incarnation? requester) async {
     info.started = false;
-    // With no children this runs to completion without suspending, so a
-    // caller that does not await stop() still sees the actor gone.
+    final inc = info.inc;
+    inc.retiring = true;
+    // With nothing in flight and no children this runs to completion without
+    // suspending, so a caller that does not await stop() still sees the
+    // actor gone.
+    if (_mustWait(inc, requester)) {
+      await _awaitIdle(inc, actorRef.id);
+    }
     if (info.children.isNotEmpty) {
-      await _stopChildren(info);
+      await _stopChildren(info, requester);
     }
-    _disposeTimers(info.actor);
-    if (wasStarted) {
-      _runPostStop(info.actor, actorRef.id);
-    }
+    _finishRetire(info.inc, actorRef.id);
     _finishStop(actorRef, info);
   }
 
+  /// Unregisters the actor. Idempotent, because a kill can overtake a
+  /// graceful stop that is still waiting.
   void _finishStop(LocalActorRef actorRef, _ActorInfo? info) {
+    if (!identical(_actors[actorRef.id], actorRef)) {
+      return;
+    }
     _eventBus.cleanup(actorRef);
     actorRef.stop();
     _actors.remove(actorRef.id);
@@ -605,11 +906,16 @@ class LocalActorSystem implements ActorSystem {
   }
 
   @override
-  Future<void> shutdown() async {
+  Future<void> shutdown() {
     if (_isShutdown) {
-      return;
+      return Future<void>.value();
     }
     _isShutdown = true;
+    final requester = _caller;
+    return _sysAsync(() => _shutdown(requester));
+  }
+
+  Future<void> _shutdown(_Incarnation? requester) async {
     _wakeUpPump();
     metrics.increment('system.shutdown');
     // Stop in reverse spawn order so children (spawned after their parents)
@@ -617,7 +923,7 @@ class LocalActorSystem implements ActorSystem {
     for (final actorRef in List<LocalActorRef>.of(_actors.values).reversed) {
       // A parent's teardown may already have taken this actor with it.
       if (identical(_actors[actorRef.id], actorRef)) {
-        await _stopActor(actorRef);
+        await _stopActor(actorRef, requester: requester);
       }
     }
     _actors.clear();
@@ -654,7 +960,7 @@ class _ActorContext implements ActorContext {
 
   @override
   Future<void> restart(ActorRef child) {
-    return system._restartActor(child.id);
+    return system._restartFrom(child.id);
   }
 
   @override

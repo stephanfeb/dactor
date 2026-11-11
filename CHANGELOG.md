@@ -41,6 +41,35 @@ Phase 0 of `doc/otp-gap-roadmap.md`: the remaining audit items H2, H4 and H5.
   decides. It was documented and never invoked.
 - Added `SupervisorActor.supervisedChildren`.
 
+Phase 1, first part: a zone per actor.
+
+- **Each actor incarnation runs in its own zone.** An error nothing caught
+  (an unawaited future, a timer or stream callback) now counts as that actor
+  failing and goes to supervision. Previously it reached the enclosing zone,
+  which for most programs means the process-level handler.
+- **Stopping or restarting an actor drops everything it left pending.**
+  Timers are cancelled and code suspended on an `await` never resumes. A
+  restarted actor's old incarnation can no longer act after its replacement
+  has started.
+- **`stop()` is graceful.** It waits for the handler in flight (or a
+  `preStart` still running) before `postStop`, for at most
+  `ActorSystemConfig.stopTimeout` (5 seconds by default), then kills the
+  actor. Restarts wait the same way, except for the handler that failed.
+  Previously `postStop` could run in the middle of a handler.
+- Added `ActorSystem.kill(ref)`: stops an actor and its children at once,
+  without waiting. `postStop` still runs. New metrics `actors.killed` and
+  `actors.stop_timed_out`.
+- **`finally` blocks around a pending `await` do not run in a killed
+  actor.** Release resources in `postStop`.
+- **An actor that stops itself is cut off at that call.** Code after
+  `await context.system.stop(context.self)` no longer runs.
+- An actor stopped during `preStart` no longer has `postStop` run later, on
+  its own; the stop waits for `preStart` and then runs it.
+- While a failed actor waits for its supervisor's decision it receives no
+  messages, also when the failure came from outside a handler.
+- Cost: an idle actor takes about 1.7 KB, up from 1.1 KB, and single-actor
+  throughput is 5 to 10 percent lower.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

@@ -149,12 +149,14 @@ void main() {
       expect(_log, isEmpty);
     });
 
-    test('an actor stopped during preStart still gets postStop', () async {
+    test('a stop during preStart waits for it, then runs postStop', () async {
       final slow = Completer<void>();
       final pending = system.spawn('z', () => _SlowStart(slow));
-      await system.stop(system.getActor('z')!);
+      final stopping = system.stop(system.getActor('z')!);
+      await _settle(20);
       expect(_log, isEmpty);
       slow.complete();
+      await stopping;
       final ref = await pending;
       expect(ref.isAlive, isFalse);
       expect(_log, ['postStop']);
