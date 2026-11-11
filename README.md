@@ -274,7 +274,14 @@ final strategy = AllForOneStrategy(
 **Supervision Decisions**:
 - `SupervisionDecision.restart` - Restart the failed actor in place. The `ActorRef`, its mailbox (pending messages are kept), watchers and event-bus subscriptions survive; only the `Actor` instance is replaced. `postStop` runs on the old instance and `preStart` on the new one. The message that caused the failure is not redelivered.
 - `SupervisionDecision.stop` - Stop the failed actor permanently
-- `SupervisionDecision.escalate` - Pass the failure up to the parent
+- `SupervisionDecision.resume` - Keep the actor and its state; the failing message is dropped
+- `SupervisionDecision.escalate` - Pass the failure up: the supervisor is treated as having failed with the same error and its own parent decides. Escalating past a top-level actor stops it.
+
+**Tree semantics**:
+- Stopping an actor stops its children first, last started first.
+- Restarting an actor also stops its children. Create children in `preStart` if they should come back with the supervisor.
+- A top-level actor is governed by the `supervision:` strategy passed to `spawn`. Without one, it is stopped on its first failure.
+- If `preStart` throws, `spawn` fails and the actor is not registered.
 
 ## ⚡ Actor Pooling for Scalability
 

@@ -73,12 +73,29 @@ class ActorSystemConfig {
   /// Maximum size of the dead letter queue before oldest entries are evicted.
   final int deadLetterQueueMaxSize;
 
+  /// The most messages the system dispatches in one event-loop turn before
+  /// yielding so that timers and I/O can run. Defaults to 128.
+  final int? maxMessagesPerTurn;
+
+  /// The longest the system keeps dispatching in one event-loop turn before
+  /// yielding. Defaults to 4 ms. A single handler that blocks for longer than
+  /// this still holds the isolate; see [blockingHandlerThreshold].
+  final Duration? maxTurnDuration;
+
+  /// A handler that runs for longer than this before its first `await` is
+  /// counted under the `actors.blocking_handler` metric, tagged with the
+  /// actor's id. Defaults to 10 ms.
+  final Duration? blockingHandlerThreshold;
+
   ActorSystemConfig({
     this.metricsCollector,
     this.traceCollector,
     this.logCollector,
     AskConfig? askConfig,
     this.deadLetterQueueMaxSize = 1000,
+    this.maxMessagesPerTurn,
+    this.maxTurnDuration,
+    this.blockingHandlerThreshold,
   }) : askConfig = askConfig ?? AskConfig();
 
   /// Creates a development-friendly configuration with longer timeouts and more retries.

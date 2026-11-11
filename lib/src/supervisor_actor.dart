@@ -6,7 +6,6 @@ import 'package:dactor/src/supervision.dart';
 class SupervisorActor extends Actor implements Supervisor {
   @override
   final SupervisionStrategy strategy;
-  final _children = <String, ActorRef>{};
 
   SupervisorActor(this.strategy);
 
@@ -20,15 +19,18 @@ class SupervisorActor extends Actor implements Supervisor {
     String id,
     T Function() actorFactory,
   ) async {
-    final actorRef = await (context.system as LocalActorSystem).spawnChild(
+    return _system.spawnChild(
       context.self.id,
       id,
       actorFactory,
       supervision: strategy,
     );
-    _children[id] = actorRef;
-    return actorRef;
   }
+
+  LocalActorSystem get _system => context.system as LocalActorSystem;
+
+  /// The children this supervisor currently has, in start order.
+  List<ActorRef> get supervisedChildren => _system.childrenOf(context.self.id);
 
   @override
   Future<SupervisionDecision> onChildFailure(
@@ -43,7 +45,7 @@ class SupervisorActor extends Actor implements Supervisor {
       if (strategy.restartAll) {
         // AllForOne: restart every child, failed one first.
         await context.restart(child);
-        for (final ref in List.of(_children.values)) {
+        for (final ref in supervisedChildren) {
           if (ref.id != child.id) {
             await context.restart(ref);
           }
@@ -53,19 +55,10 @@ class SupervisorActor extends Actor implements Supervisor {
         await context.restart(child);
       }
     } else if (decision == SupervisionDecision.stop) {
-      await (context.system as LocalActorSystem).stop(child);
-      final childId = _findChildId(child);
-      if (childId != null) {
-        _children.remove(childId);
-      }
+      await _system.stop(child);
     }
+    // resume: the child carries on with its state. escalate: the system
+    // treats this supervisor as failed and asks its own parent.
     return decision;
-  }
-
-  String? _findChildId(ActorRef child) {
-    for (final entry in _children.entries) {
-      if (entry.value.id == child.id) return entry.key;
-    }
-    return null;
   }
 }

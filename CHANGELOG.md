@@ -1,3 +1,46 @@
+## Unreleased (experimental/otp-gap)
+
+Phase 0 of `doc/otp-gap-roadmap.md`: the remaining audit items H2, H4 and H5.
+
+- **The message pump yields to the event loop.** Dispatch used to run
+  entirely in microtasks, so a mailbox backlog kept timers, I/O and `ask`
+  timeouts waiting until it drained (a 1 ms timer measured at 1.4 s). The
+  pump now stops after 128 messages or 4 ms in one event-loop turn and
+  resumes on the next. Both limits are configurable through
+  `ActorSystemConfig.maxMessagesPerTurn` and `maxTurnDuration`. Throughput is
+  unchanged.
+- New metric `actors.blocking_handler`, tagged with the actor id, counts
+  handlers that run for longer than
+  `ActorSystemConfig.blockingHandlerThreshold` (10 ms by default) before
+  their first `await`.
+- **`SupervisionDecision.escalate` works.** The supervisor that escalates is
+  treated as having failed with the same error, and its own parent decides.
+  Escalating past a top-level actor stops it. Previously escalate behaved
+  like resume.
+- **`spawn(supervision:)` is honoured for top-level actors.** The strategy
+  now decides whether a failing top-level actor is resumed, restarted or
+  stopped. Previously it was stored and ignored, and the actor was always
+  stopped. Top-level actors spawned without a strategy are still stopped.
+- **Stopping an actor stops its children first**, last started first. This
+  includes pool workers, which used to outlive their router.
+- **Restarting an actor stops its children.** The new incarnation starts
+  with none; a supervisor that wants them back creates them in `preStart`,
+  as `RouterActor` does.
+- Failures of two children of one supervisor are handled one after the
+  other. Under `AllForOneStrategy`, two children failing together used to
+  restart every child twice, with the restarts interleaved.
+- **A failed `preStart` rolls the spawn back.** `spawn` still rejects, but
+  the id is free again, refs obtained in the meantime are dead, and
+  `postStop` is not called on an actor that never started. Previously the
+  actor stayed registered and processed messages uninitialised.
+- An actor stopped while its `preStart` is still running gets its `postStop`
+  once `preStart` completes.
+- A throwing `postStop` no longer aborts `stop()` or `shutdown()`; it is
+  counted as `actors.post_stop_failed` and logged.
+- `Actor.onError` is now called when a handler throws, before supervision
+  decides. It was documented and never invoked.
+- Added `SupervisorActor.supervisedChildren`.
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has
