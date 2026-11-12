@@ -161,8 +161,8 @@ void main() {
       await Future.delayed(Duration(milliseconds: 100));
 
       // Act
-      publisher.tell(LocalMessage(payload: 'publish_order'));
-      publisher.tell(LocalMessage(payload: 'publish_payment'));
+      publisher.tell('publish_order');
+      publisher.tell('publish_payment');
 
       // Wait for events to be processed
       await Future.delayed(Duration(milliseconds: 100));
@@ -190,7 +190,7 @@ void main() {
       expect(system.eventBus.subscriberCount, equals(1));
 
       // Act - unsubscribe
-      actor.tell(LocalMessage(payload: 'unsubscribe'));
+      actor.tell('unsubscribe');
       await Future.delayed(Duration(milliseconds: 100));
 
       // Assert - should have no subscribers
@@ -228,7 +228,7 @@ void main() {
       expect(system.eventBus.subscriberCount, equals(2));
 
       // Act
-      publisher.tell(LocalMessage(payload: 'publish_order'));
+      publisher.tell('publish_order');
       await Future.delayed(Duration(milliseconds: 100));
 
       // Both actors should receive the event (verified by subscription count)
@@ -240,7 +240,7 @@ void main() {
       final publisher = await system.spawn('publisher', () => PublisherActor());
 
       // Act - publish event with no subscribers
-      publisher.tell(LocalMessage(payload: 'publish_order'));
+      publisher.tell('publish_order');
       await Future.delayed(Duration(milliseconds: 100));
 
       // Assert - should not throw and system should remain stable
@@ -260,7 +260,7 @@ void main() {
 
         final publisher =
             await system.spawn('publisher', () => PublisherActor());
-        publisher.tell(LocalMessage(payload: 'publish_order'));
+        publisher.tell('publish_order');
         await Future.delayed(Duration(milliseconds: 100));
 
         await system.stop(actor);

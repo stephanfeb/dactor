@@ -1,24 +1,10 @@
 import 'package:dactor/dactor.dart';
-import 'package:dactor/src/logging/logging.dart';
-import 'package:dactor/src/message.dart';
 import 'package:test/test.dart';
 
-class StringMessage implements Message {
+class StringMessage {
   final String message;
 
   StringMessage(this.message);
-
-  @override
-  String get correlationId => 'test';
-
-  @override
-  Map<String, dynamic> get metadata => {};
-
-  @override
-  ActorRef? get replyTo => null;
-
-  @override
-  DateTime get timestamp => DateTime.now();
 
   @override
   String toString() => message;

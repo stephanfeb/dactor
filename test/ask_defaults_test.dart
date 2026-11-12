@@ -30,8 +30,7 @@ void main() {
 
     final sw = Stopwatch()..start();
     await expectLater(
-      ref.ask<dynamic>(
-          LocalMessage(payload: 'ping'), const Duration(milliseconds: 50)),
+      ref.ask<dynamic>('ping', const Duration(milliseconds: 50)),
       throwsA(isA<TimeoutException>()
           .having((e) => e.toString(), 'message', contains('attempt 1'))),
     );

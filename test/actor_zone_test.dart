@@ -87,8 +87,7 @@ SupervisionStrategy _restart() =>
 Future<void> _settle([int ms = 60]) =>
     Future<void>.delayed(Duration(milliseconds: ms));
 
-void _tell(ActorRef ref, Object payload) =>
-    ref.tell(LocalMessage(payload: payload));
+void _tell(ActorRef ref, Object payload) => ref.tell(payload);
 
 void main() {
   late LocalActorSystem system;

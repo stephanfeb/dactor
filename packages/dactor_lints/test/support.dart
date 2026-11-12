@@ -2,13 +2,20 @@ import 'package:analyzer_testing/analysis_rule/analysis_rule.dart';
 
 /// Just enough of package:dactor for the rules to recognise its types.
 const dactorStub = '''
-abstract class Message {}
-
 abstract class ActorRef {
-  void tell(Message message, {ActorRef? sender});
+  void tell(Object? message);
+  Future<T> ask<T>(Object? message, [Duration? timeout]);
 }
 
-class LocalMessage implements Message {
+mixin Call<R> {}
+
+extension type const TypedRef<M>(ActorRef untyped) {
+  void tell(M message) => untyped.tell(message);
+  Future<R> call<R>(Call<R> request, {Duration? timeout}) =>
+      untyped.ask<R>(request, timeout);
+}
+
+class LocalMessage {
   final dynamic payload;
   final ActorRef? sender;
   LocalMessage({this.payload, this.sender});
@@ -20,7 +27,9 @@ class EventBus {
 
 abstract class ActorContext {
   ActorRef get self;
+  ActorRef? get sender;
   void publish<T>(T event) {}
+  void forward(ActorRef target, Object? message) {}
 }
 
 abstract class Actor {

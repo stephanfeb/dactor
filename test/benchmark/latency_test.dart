@@ -2,16 +2,11 @@ import 'package:dactor/dactor.dart';
 import 'package:test/test.dart';
 import 'dart:async';
 
-import 'package:dactor/src/local_actor_system.dart';
-import 'package:dactor/src/local_message.dart';
-import 'package:dactor/src/message.dart';
-import 'package:dactor/src/routing/pool.dart';
-
 class PingActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (message == 'ping') {
-      context.sender!.tell(LocalMessage(payload: 'pong'));
+      context.sender!.tell('pong');
     }
   }
 }
@@ -37,8 +32,7 @@ void main() {
 
       for (var i = 0; i < messageCount; i++) {
         stopwatch.start();
-        await actor.ask(
-            LocalMessage(payload: 'ping'), const Duration(seconds: 1));
+        await actor.ask('ping', const Duration(seconds: 1));
         stopwatch.stop();
         totalLatency += stopwatch.elapsedMicroseconds;
         stopwatch.reset();
@@ -59,8 +53,7 @@ void main() {
 
       for (var i = 0; i < messageCount; i++) {
         stopwatch.start();
-        await pooledActor.ask(
-            LocalMessage(payload: 'ping'), const Duration(seconds: 1));
+        await pooledActor.ask('ping', const Duration(seconds: 1));
         stopwatch.stop();
         totalLatency += stopwatch.elapsedMicroseconds;
         stopwatch.reset();

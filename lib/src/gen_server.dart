@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:meta/meta.dart';
 
@@ -42,9 +43,15 @@ import 'package:dactor/src/typed_ref.dart';
 /// mutate, a handler that throws leaves no half-made change behind, and the
 /// system can read the state ([Sys.getState]), replace it, and carry it over
 /// to new code ([Sys.upgrade] and [codeChange]).
+///
+/// Work that should not hold up a caller goes in [handleContinue]: [init] or
+/// a handler calls [continueWith], and the continue runs right after it,
+/// before the next message. From [init] it runs after `spawn` has returned;
+/// from [handleCall] it runs after the reply has gone.
 abstract class GenServer<S, M> extends Actor implements StatefulBehaviour {
   late S _state;
   bool _initialised = false;
+  final _continues = Queue<Object?>();
 
   /// The state the server starts with. Runs in `preStart`: a throw here
   /// fails the spawn.
@@ -67,6 +74,18 @@ abstract class GenServer<S, M> extends Actor implements StatefulBehaviour {
   /// Handles a message that is not an [M] and returns the new state.
   @protected
   FutureOr<S> handleInfo(Object? message, S state) => state;
+
+  /// Runs the work asked for with [continueWith] and returns the new state.
+  /// A throw here fails the server, as a throw in a handler does.
+  @protected
+  FutureOr<S> handleContinue(Object? arg, S state) =>
+      throw UnsupportedError('$runtimeType does not handle continue $arg');
+
+  /// Asks for [handleContinue] with [arg] once the current handler, or
+  /// [init], has returned, before any other message. Several run in the
+  /// order asked, and a continue may ask for another.
+  @protected
+  void continueWith(Object? arg) => _continues.add(arg);
 
   /// Called from `postStop` with the last state, unless [init] never
   /// completed.
@@ -120,14 +139,34 @@ abstract class GenServer<S, M> extends Actor implements StatefulBehaviour {
     _started(initial);
   }
 
-  void _started(S initial) {
+  FutureOr<void> _started(S initial) {
     _state = initial;
     _initialised = true;
+    if (_continues.isEmpty) return null;
+    final ctx = context;
+    if (ctx is BehaviourContext) {
+      // Not here: spawn waits for preStart, and init's continue must not
+      // hold it up.
+      (ctx as BehaviourContext).deliverFirst(const _Continue());
+      return null;
+    }
+    return _runContinues();
+  }
+
+  Future<void> _runContinues() async {
+    while (_continues.isNotEmpty) {
+      _state = await handleContinue(_continues.removeFirst(), _state);
+    }
   }
 
   @override
   @nonVirtual
   Future<void> onMessage(dynamic message) async {
+    if (message is! _Continue) await _handle(message);
+    await _runContinues();
+  }
+
+  Future<void> _handle(dynamic message) async {
     if (message is! M) {
       _state = await handleInfo(message, _state);
       return;
@@ -161,4 +200,9 @@ abstract class GenServer<S, M> extends Actor implements StatefulBehaviour {
   void postStop() {
     if (_initialised) terminate(_state);
   }
+}
+
+/// Runs the continues [GenServer.init] asked for.
+final class _Continue {
+  const _Continue();
 }

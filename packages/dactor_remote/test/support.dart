@@ -1,10 +1,11 @@
 import 'dart:async';
 
 import 'package:dactor/dactor.dart';
+import 'package:dactor/spi.dart';
 import 'package:dactor_remote/dactor_remote.dart';
 
 void tell(ActorRef ref, Object? payload, {ActorRef? sender}) =>
-    ref.tell(LocalMessage(payload: payload), sender: sender);
+    sendAs(sender, () => ref.tell(payload));
 
 String describe(ExitReason reason) => switch (reason) {
       NormalExit() => 'normal',
@@ -95,39 +96,36 @@ class Agent extends Actor {
   Future<void> onMessage(dynamic message) async {
     switch (message) {
       case 'ping':
-        context.sender?.tell(LocalMessage(payload: 'pong from $name'),
-            sender: context.self);
+        context.sender?.tell('pong from $name');
       case String text when text.startsWith('pong'):
         log.add('$name got $text');
       case Introduce(:final alias, :final who):
         known[alias] = who;
-        context.sender?.tell(LocalMessage(payload: 'met $alias'));
+        context.sender?.tell('met $alias');
       case ('ping', String who):
-        known[who]!.tell(LocalMessage(payload: 'ping'), sender: context.self);
+        known[who]!.tell('ping');
       case ('ask', String who):
-        final answer =
-            await known[who]!.ask<String>(LocalMessage(payload: 'ping'));
-        context.sender?.tell(LocalMessage(payload: 'relayed: $answer'));
+        final answer = await known[who]!.ask<String>('ping');
+        context.sender?.tell('relayed: $answer');
       case ('watch', String who):
         context.watch(known[who]!);
-        context.sender?.tell(LocalMessage(payload: 'watching'));
+        context.sender?.tell('watching');
       case ('unwatch', String who):
         context.unwatch(known[who]!);
-        context.sender?.tell(LocalMessage(payload: 'unwatched'));
+        context.sender?.tell('unwatched');
       case ('link', String who):
         context.link(known[who]!);
-        context.sender?.tell(LocalMessage(payload: 'linked'));
+        context.sender?.tell('linked');
       case ('unlink', String who):
         context.unlink(known[who]!);
-        context.sender?.tell(LocalMessage(payload: 'unlinked'));
+        context.sender?.tell('unlinked');
       case ('forward', String who, Object? payload):
         // The original sender stays the sender.
-        known[who]!
-            .tell(LocalMessage(payload: payload), sender: context.sender);
+        context.forward(known[who]!, payload);
       case 'boom':
         throw StateError('boom in $name');
       case 'sync':
-        context.sender?.tell(LocalMessage(payload: 'synced'));
+        context.sender?.tell('synced');
       case Terminated(:final actor, :final reason):
         log.add('$name saw ${actor.id} terminated: ${describe(reason)}');
       case ExitSignal(:final from, :final reason):

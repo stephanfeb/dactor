@@ -61,10 +61,7 @@ void sameAsLocalScenarios(String label, NewNode? newNode,
         b.remote.expose('bob', bob);
         bobFromA = await a.remote.lookup(b.id, 'bob');
       }
-      expect(
-          await alice
-              .ask<String>(LocalMessage(payload: Introduce('bob', bobFromA))),
-          'met bob');
+      expect(await alice.ask<String>(Introduce('bob', bobFromA)), 'met bob');
     }
 
     test('tell, and a reply to the sender', () async {
@@ -76,22 +73,19 @@ void sameAsLocalScenarios(String label, NewNode? newNode,
 
     test('ask from outside and from inside a handler', () async {
       await start();
-      expect(await bobFromA.ask<String>(LocalMessage(payload: 'ping')),
-          'pong from bob');
-      expect(await alice.ask<String>(LocalMessage(payload: ('ask', 'bob'))),
-          'relayed: pong from bob');
+      expect(await bobFromA.ask<String>('ping'), 'pong from bob');
+      expect(await alice.ask<String>(('ask', 'bob')), 'relayed: pong from bob');
     });
 
     test('ask to a stopped actor fails with StateError', () async {
       await start();
       await b.system.stop(bob);
-      await expectLater(bobFromA.ask<String>(LocalMessage(payload: 'ping')),
-          throwsStateError);
+      await expectLater(bobFromA.ask<String>('ping'), throwsStateError);
     });
 
     test('watch reports a normal stop', () async {
       await start();
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(('watch', 'bob'));
       await settle();
       await b.system.stop(bob);
       await settle();
@@ -100,7 +94,7 @@ void sameAsLocalScenarios(String label, NewNode? newNode,
 
     test('watch reports a failure with its error', () async {
       await start();
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(('watch', 'bob'));
       await settle();
       tell(bob, 'boom');
       await settle();
@@ -111,14 +105,14 @@ void sameAsLocalScenarios(String label, NewNode? newNode,
     test('watch on a dead actor reports noproc', () async {
       await start();
       await b.system.stop(bob);
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(('watch', 'bob'));
       await settle();
       expect(seen(), contains('alice saw bob terminated: noproc'));
     });
 
     test('a linked failure restarts the supervised partner', () async {
       await start(aliceSupervision: const OneForOneStrategy(decider: restart));
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       tell(bob, 'boom');
       await settle();
@@ -127,7 +121,7 @@ void sameAsLocalScenarios(String label, NewNode? newNode,
 
     test('a trapping partner gets the exit as a message', () async {
       await start(aliceTraps: true);
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       tell(bob, 'boom');
       await settle();
@@ -137,7 +131,7 @@ void sameAsLocalScenarios(String label, NewNode? newNode,
 
     test('a normal stop leaves a linked partner alone', () async {
       await start();
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       await b.system.stop(bob);
       await settle();
@@ -148,16 +142,16 @@ void sameAsLocalScenarios(String label, NewNode? newNode,
     test('linking to a dead actor signals noproc', () async {
       await start(aliceTraps: true);
       await b.system.stop(bob);
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       expect(seen(), contains('alice got exit from bob: noproc'));
     });
 
     test('unlink ends the link', () async {
       await start(aliceTraps: true);
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
-      await alice.ask<String>(LocalMessage(payload: ('unlink', 'bob')));
+      await alice.ask<String>(('unlink', 'bob'));
       await settle();
       tell(bob, 'boom');
       await settle();
@@ -183,15 +177,15 @@ void transportScenarios(String label, NewNode newNode,
       final alice = await sa.spawn('alice', () => Agent('alice', log));
       b.remote.expose('bob', await sb.spawn('bob', () => Agent('bob', log)));
       final bob = await a.remote.lookup(b.id, 'bob');
-      await alice.ask<String>(LocalMessage(payload: Introduce('bob', bob)));
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(Introduce('bob', bob));
+      await alice.ask<String>(('watch', 'bob'));
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       await b.close();
       await Future<void>.delayed(noticeWithin);
       expect(log, contains('alice saw ${bob.id} terminated: noconnection'));
-      await expectLater(bob.ask<String>(LocalMessage(payload: 'ping')),
-          throwsA(isA<NodeUnreachable>()));
+      await expectLater(
+          bob.ask<String>('ping'), throwsA(isA<NodeUnreachable>()));
 
       // A fresh node somewhere else is reachable as usual.
       final c = await newNode();
@@ -199,8 +193,7 @@ void transportScenarios(String label, NewNode newNode,
       addTearDown(c.close);
       c.remote.expose('carl', await sc.spawn('carl', () => Agent('carl', log)));
       final carl = await a.remote.lookup(c.id, 'carl');
-      expect(await carl.ask<String>(LocalMessage(payload: 'ping')),
-          'pong from carl');
+      expect(await carl.ask<String>('ping'), 'pong from carl');
     });
 
     test('large and many frames arrive whole and in order', () async {
@@ -221,8 +214,7 @@ void transportScenarios(String label, NewNode newNode,
       final bob = await a.remote.lookup(b.id, 'bob');
       final big = 'x' * (2 * 1024 * 1024);
       tell(bob, big);
-      expect(await bob.ask<String>(LocalMessage(payload: 'ping')),
-          'pong from bob');
+      expect(await bob.ask<String>('ping'), 'pong from bob');
       expect(log.last.length, greaterThan(2 * 1024 * 1024));
     });
   });

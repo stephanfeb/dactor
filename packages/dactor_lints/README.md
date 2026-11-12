@@ -41,13 +41,13 @@ class Cart {
   int items = 0;                              // not final
 }
 
-ref.tell(LocalMessage(payload: cart));        // reported here
+ref.tell(cart);        // reported here
 ```
 
 Reported in two places:
 
-- on each non-final field of a class that implements dactor's `Message` (including subclasses of `LocalMessage`);
-- where an object of any other class with a non-final field, its own or inherited, is passed as the `payload:` of a `LocalMessage` or to `publish`.
+- where an object of a class with a non-final field, its own or inherited, is sent: given to `tell`, `ask`, `context.forward`, a `TypedRef`'s `tell` or `call`, `publish`, or as the `payload:` of a deprecated `LocalMessage`;
+- on each non-final field of a class that extends the deprecated `LocalMessage`.
 
 `final`, `late final`, `const` and `static` fields are fine, as are getters.
 
@@ -63,7 +63,7 @@ class Counter extends Actor {
 
   @override
   Future<void> onMessage(dynamic message) async {
-    peer.tell(LocalMessage(payload: () => count++));   // reported
+    peer.tell(() => count++);   // reported
     context.publish(this);                             // reported
   }
 }

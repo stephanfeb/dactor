@@ -70,8 +70,7 @@ class ProbeActor extends Actor {
 
   ProbeActor(this.label, this.log);
 
-  void _reply(Object? value) =>
-      context.sender?.tell(LocalMessage(payload: value));
+  void _reply(Object? value) => context.sender?.tell(value);
 
   @override
   Future<void> onMessage(dynamic message) async {
@@ -99,13 +98,10 @@ class ProbeActor extends Actor {
         // Not awaited: two probes asking each other back at once would
         // each block its mailbox on the other's and both time out.
         final sender = context.sender;
-        void reply(Object? value) => sender?.tell(LocalMessage(payload: value));
+        void reply(Object? value) => sender?.tell(value);
         unawaited(
           target
-              .ask<String>(
-                LocalMessage(payload: 'ping'),
-                const Duration(seconds: 20),
-              )
+              .ask<String>('ping', const Duration(seconds: 20))
               .then(reply, onError: (Object e) => reply('failed: $e')),
         );
       case ['report', String from, String line]:
@@ -270,7 +266,7 @@ class Probe {
         for (final member in change.joined) {
           if (member is! RemoteRef) continue;
           log('member joined: ${_name(member.node)}');
-          actor.tell(LocalMessage(payload: _Watch(member)));
+          actor.tell(_Watch(member));
           if (autoCheck) unawaited(check(member));
         }
         for (final member in change.left) {
@@ -296,7 +292,7 @@ class Probe {
     _sink(line);
     final seed = this.seed;
     if (seed != null) {
-      seed.tell(LocalMessage(payload: ['report', label, line]));
+      seed.tell(['report', label, line]);
     }
   }
 
@@ -313,7 +309,7 @@ class Probe {
     if (!_checking.add(peer.node)) return;
     try {
       final watch = Stopwatch()..start();
-      final label = await peer.ask<String>(LocalMessage(payload: 'whoami'));
+      final label = await peer.ask<String>('whoami');
       _labels[peer.node] = label;
       final who = _name(peer.node);
       log(
@@ -324,7 +320,7 @@ class Probe {
       final rtts = <int>[];
       for (var i = 0; i < 10; i++) {
         watch.reset();
-        await peer.ask<String>(LocalMessage(payload: 'ping'));
+        await peer.ask<String>('ping');
         rtts.add(watch.elapsedMicroseconds);
       }
       rtts.sort();
@@ -337,17 +333,18 @@ class Probe {
       const count = 5000;
       watch.reset();
       for (var i = 0; i < count; i++) {
-        peer.tell(LocalMessage(payload: ['seq', run, i]));
+        peer.tell(['seq', run, i]);
       }
-      final order = await peer.ask<String>(
-        LocalMessage(payload: ['seqEnd', run, count]),
-        const Duration(seconds: 120),
-      );
+      final order = await peer.ask<String>([
+        'seqEnd',
+        run,
+        count,
+      ], const Duration(seconds: 120));
       log('check $who: $count in order: $order in ${ms(watch.elapsed)}');
 
       watch.reset();
       final size = await peer.ask<int>(
-        LocalMessage(payload: Uint8List(1 << 20)),
+        Uint8List(1 << 20),
         const Duration(seconds: 120),
       );
       log(
@@ -357,7 +354,7 @@ class Probe {
 
       watch.reset();
       final back = await peer.ask<String>(
-        LocalMessage(payload: AskBack(actor)),
+        AskBack(actor),
         const Duration(seconds: 30),
       );
       log(

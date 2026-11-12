@@ -6,8 +6,8 @@ import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/local_actor_ref.dart';
 import 'package:dactor/src/local_actor_system.dart';
 import 'package:dactor/src/local_message.dart';
+import 'package:dactor/src/sending.dart';
 import 'package:dactor/src/logging/logging.dart';
-import 'package:dactor/src/message.dart';
 import 'package:dactor/src/one_for_one_strategy.dart';
 import 'package:dactor/src/supervision.dart';
 import 'package:dactor/src/system_messages.dart';
@@ -222,8 +222,11 @@ class Isolated extends Actor {
         if (pending != null && !pending.isCompleted) pending.complete();
         unawaited(context.system.stop(context.self));
       case ('tell', Object token, Object? payload, bool withSender):
-        _resolve(token)?.tell(LocalMessage(payload: payload),
-            sender: withSender ? context.self : null);
+        final target = _resolve(token);
+        if (target != null) {
+          Sending.as(
+              withSender ? context.self : null, () => target.tell(payload));
+        }
       case ('ask', Object token, Object? payload, SendPort reply, int? micros):
         final target = _resolve(token);
         if (target == null) {
@@ -231,8 +234,8 @@ class Isolated extends Actor {
           return;
         }
         target
-            .ask<Object?>(LocalMessage(payload: payload),
-                micros == null ? null : Duration(microseconds: micros))
+            .ask<Object?>(
+                payload, micros == null ? null : Duration(microseconds: micros))
             .then((value) => reply.send(('ok', value)),
                 onError: (Object e) => reply.send(('err', _sendable(e))));
     }
@@ -338,7 +341,7 @@ class Isolated extends Actor {
             String id => system.getActor(id),
             _ => temporary[token],
           };
-          target?.tell(LocalMessage(payload: payload));
+          target?.tell(payload);
         }
       };
       final gone = RawReceivePort();
@@ -425,8 +428,8 @@ Future<void> _isolateMain(_Boot boot) async {
       case 'ping':
         home.send('pong');
       case ('msg', int seq, Object? payload, Object? sender):
-        ref.tell(LocalMessage(payload: _FromHome(seq, payload)),
-            sender: sender == null ? null : _HomeRef(home, sender));
+        Sending.as(sender == null ? null : _HomeRef(home, sender),
+            () => ref.tell(_FromHome(seq, payload)));
       case 'stop':
         stopping = true;
         await system.shutdown();
@@ -496,15 +499,14 @@ class _HomeRef implements ActorRef {
   @override
   bool get isAlive => true;
 
-  static Object? _payload(Message message) =>
-      message is LocalMessage ? message.payload : message;
+  static Object? _payload(Object? message) => unwrapLegacy(message);
 
   @override
-  void tell(Message message, {ActorRef? sender}) =>
-      _home.send(('tell', _token, _payload(message), sender != null));
+  void tell(Object? message) =>
+      _home.send(('tell', _token, _payload(message), Sending.sender != null));
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) async {
+  Future<T> ask<T>(Object? message, [Duration? timeout]) async {
     final reply = ReceivePort();
     try {
       _home.send((

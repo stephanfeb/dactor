@@ -1,8 +1,7 @@
 import 'dart:async';
 
 import 'package:dactor/dactor.dart';
-import 'package:dactor/src/metrics/metrics.dart';
-import 'package:dactor_test/dactor_test.dart';
+import 'support/probe.dart';
 import 'package:test/test.dart';
 
 /// Actor that records the order of message processing to verify sequential execution.
@@ -37,7 +36,7 @@ class FailingActor extends Actor {
       throw Exception('Intentional failure');
     }
     if (message == 'ping') {
-      context.sender?.tell(LocalMessage(payload: 'pong'));
+      context.sender?.tell('pong');
     }
   }
 }
@@ -53,7 +52,7 @@ class CounterActor extends Actor {
     } else if (message == 'fail') {
       throw Exception('Counter failure');
     } else if (message == 'get') {
-      context.sender?.tell(LocalMessage(payload: count));
+      context.sender?.tell(count);
     }
   }
 }
@@ -82,38 +81,13 @@ void main() {
 
       // Send messages rapidly
       for (var i = 0; i < messageCount; i++) {
-        ref.tell(LocalMessage(payload: i));
+        ref.tell(i);
       }
 
       await allDone.future.timeout(const Duration(seconds: 5));
 
       // Messages must be processed in order (sequential guarantee)
       expect(actor.processedOrder, List.generate(messageCount, (i) => i));
-    });
-  });
-
-  group('Terminated correlationId stability', () {
-    test('correlationId returns same value on multiple accesses', () {
-      final ref = _FakeActorRef('test');
-      final terminated = Terminated(ref);
-
-      final id1 = terminated.correlationId;
-      final id2 = terminated.correlationId;
-      final id3 = terminated.correlationId;
-
-      expect(id1, equals(id2));
-      expect(id2, equals(id3));
-    });
-
-    test('DeadLetter correlationId returns same value on multiple accesses',
-        () {
-      final ref = _FakeActorRef('test');
-      final deadLetter = DeadLetter('msg', ref, ref);
-
-      final id1 = deadLetter.correlationId;
-      final id2 = deadLetter.correlationId;
-
-      expect(id1, equals(id2));
     });
   });
 
@@ -196,11 +170,11 @@ void main() {
       final child2 = await supervisor.supervise('child2', () => CounterActor());
 
       // Increment child2's counter
-      child2.tell(LocalMessage(payload: 'increment'));
+      child2.tell('increment');
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Fail child1 - only child1 should restart
-      child1.tell(LocalMessage(payload: 'fail'));
+      child1.tell('fail');
       await Future.delayed(const Duration(milliseconds: 100));
 
       // child2 should still be alive (not restarted) and its state preserved
@@ -220,10 +194,10 @@ class _FakeActorRef implements ActorRef {
   bool get isAlive => true;
 
   @override
-  void tell(Message message, {ActorRef? sender}) {}
+  void tell(Object? message) {}
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) {
+  Future<T> ask<T>(Object? message, [Duration? timeout]) {
     throw UnimplementedError();
   }
 

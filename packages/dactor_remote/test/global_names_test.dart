@@ -51,8 +51,7 @@ void main() {
       expect(holder(on, 'db'), 'b/store', reason: on);
     }
     final db = names['c']!.whereis('db')!;
-    expect(
-        await db.ask<String>(LocalMessage(payload: 'ping')), 'pong from store');
+    expect(await db.ask<String>('ping'), 'pong from store');
   });
 
   test('a name held elsewhere is refused', () async {

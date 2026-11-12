@@ -95,8 +95,7 @@ void main() {
     final bobHere = await received.future.timeout(const Duration(seconds: 10));
     expect(newcomer.remote.addressesOf(phone.id),
         everyElement(contains('/p2p-circuit/p2p/${phone.id}')));
-    expect(await bobHere.ask<String>(LocalMessage(payload: 'ping')),
-        'pong from bob');
+    expect(await bobHere.ask<String>('ping'), 'pong from bob');
   });
 
   test('the text of a reference is enough to reach it', () async {
@@ -109,8 +108,7 @@ void main() {
     // A node that knows no one at all.
     newcomer = node(await transport());
     final bobHere = newcomer.remote.resolve(uri);
-    expect(await bobHere.ask<String>(LocalMessage(payload: 'ping')),
-        'pong from bob');
+    expect(await bobHere.ask<String>('ping'), 'pong from bob');
   });
 
   test('a process group passes on the addresses of its nodes', () async {
@@ -136,8 +134,7 @@ void main() {
     }
     expect(scope[newcomer]!.nodes, {server.id, phone.id});
     final bob = scope[newcomer]!.members('workers').single;
-    expect(
-        await bob.ask<String>(LocalMessage(payload: 'ping')), 'pong from bob');
+    expect(await bob.ask<String>('ping'), 'pong from bob');
   });
 
   test('a resolver is asked for a node no one gave an address for', () async {
@@ -147,8 +144,7 @@ void main() {
       return node == phone.id ? phoneTransport.localAddresses : const [];
     }));
     final bob = await newcomer.remote.lookup(phone.id, 'bob');
-    expect(
-        await bob.ask<String>(LocalMessage(payload: 'ping')), 'pong from bob');
+    expect(await bob.ask<String>('ping'), 'pong from bob');
     expect(asked, [phone.id]);
   });
 

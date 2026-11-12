@@ -1,17 +1,38 @@
 import 'dart:collection';
 
-import 'package:dactor/src/message.dart';
+import 'package:meta/meta.dart';
+
+import 'package:dactor/src/actor_ref.dart';
+
+/// A message on its way to an actor, with the sender the runtime stamped on
+/// it. Actors never see this: `onMessage` gets the [payload] and
+/// `context.sender` the [sender].
+@internal
+final class Envelope {
+  static int _next = 0;
+
+  final Object? payload;
+  final ActorRef? sender;
+
+  /// Ties the trace events of one message together. Unique within this
+  /// isolate.
+  final int id;
+
+  Envelope(this.payload, this.sender) : id = ++_next;
+
+  String get traceId => 'm$id';
+}
 
 class Mailbox {
   final String actorId;
   final void Function(Mailbox mailbox) _onSchedule;
   final void Function(String name, double value, {Map<String, String>? tags})?
       _onGauge;
-  final _queue = Queue<Message>();
+  final _queue = Queue<Envelope>();
 
   /// Messages from the actor system itself. They are delivered before
   /// anything in [_queue], so a backlog cannot hold up supervision.
-  Queue<Message>? _system;
+  Queue<Envelope>? _system;
   bool _isDisposed = false;
 
   Mailbox(
@@ -21,7 +42,7 @@ class Mailbox {
         onGauge,
   }) : _onGauge = onGauge;
 
-  void enqueue(Message message) {
+  void enqueue(Envelope message) {
     if (!_isDisposed) {
       _queue.add(message);
       _onGauge?.call('mailbox.size', _queue.length.toDouble(),
@@ -30,15 +51,25 @@ class Mailbox {
     }
   }
 
-  /// Queues a system message ahead of all user messages.
-  void enqueueSystem(Message message) {
+  /// Queues a user message ahead of the other user messages.
+  void enqueueFirst(Envelope message) {
     if (!_isDisposed) {
-      (_system ??= Queue<Message>()).add(message);
+      _queue.addFirst(message);
+      _onGauge?.call('mailbox.size', _queue.length.toDouble(),
+          tags: {'actorId': actorId});
       _onSchedule(this);
     }
   }
 
-  Message? dequeue() {
+  /// Queues a system message ahead of all user messages.
+  void enqueueSystem(Envelope message) {
+    if (!_isDisposed) {
+      (_system ??= Queue<Envelope>()).add(message);
+      _onSchedule(this);
+    }
+  }
+
+  Envelope? dequeue() {
     final system = _system;
     if (system != null && system.isNotEmpty) {
       return system.removeFirst();
@@ -55,15 +86,15 @@ class Mailbox {
   bool get hasSystemMessages => _system?.isNotEmpty ?? false;
 
   /// The next system message, leaving user messages where they are.
-  Message? dequeueSystem() {
+  Envelope? dequeueSystem() {
     final system = _system;
     return system != null && system.isNotEmpty ? system.removeFirst() : null;
   }
 
   /// Removes and returns the first user message that passes [test], leaving
   /// the others in order.
-  Message? takeFirstWhere(bool Function(Message message) test) {
-    Message? found;
+  Envelope? takeFirstWhere(bool Function(Envelope message) test) {
+    Envelope? found;
     _queue.removeWhere((message) {
       if (found == null && test(message)) {
         found = message;

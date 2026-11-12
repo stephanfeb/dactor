@@ -27,6 +27,9 @@ abstract interface class BehaviourContext {
   /// The state the previous incarnation handed over, if this incarnation was
   /// started by an upgrade. Returns it once.
   BehaviourHandoff? takeHandoff();
+
+  /// Puts [message] in front of every user message waiting for this actor.
+  void deliverFirst(Object? message);
 }
 
 /// A snapshot of one actor, from [Sys.statistics].

@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:dactor/dactor.dart';
+import 'package:dactor/spi.dart';
 import 'package:dactor/simulation.dart';
 import 'package:test/test.dart';
 
-void _tell(ActorRef ref, Object payload) =>
-    ref.tell(LocalMessage(payload: payload));
+void _tell(ActorRef ref, Object payload) => ref.tell(payload);
 
 /// Records what it receives.
 class Recorder extends Actor {
@@ -44,14 +44,14 @@ Future<void> racy(LocalActorSystem system) async {
 class Echo extends Actor {
   @override
   Future<void> onMessage(dynamic message) async =>
-      context.sender?.tell(LocalMessage(payload: message));
+      context.sender?.tell(message);
 }
 
 /// Sends everything straight back, forever if the other side does too.
 class Bouncer extends Actor {
   @override
-  Future<void> onMessage(dynamic message) async => context.sender
-      ?.tell(LocalMessage(payload: message), sender: context.self);
+  Future<void> onMessage(dynamic message) async =>
+      context.sender?.tell(message);
 }
 
 class Ticker extends Actor {
@@ -237,11 +237,9 @@ void main() {
     test('ask works, and its timeout runs on the virtual clock', () {
       simulate((sim) async {
         final echo = await sim.system.spawn('echo', () => Echo());
-        expect(await echo.ask<String>(LocalMessage(payload: 'hi')), 'hi');
+        expect(await echo.ask<String>('hi'), 'hi');
         final silent = await sim.system.spawn('silent', () => Recorder([]));
-        await expectLater(
-            silent.ask<String>(
-                LocalMessage(payload: 'hi'), const Duration(minutes: 5)),
+        await expectLater(silent.ask<String>('hi', const Duration(minutes: 5)),
             throwsA(isA<TimeoutException>()));
         expect(sim.elapsed, const Duration(minutes: 5));
       });
@@ -272,7 +270,7 @@ void main() {
           () => simulate((sim) async {
                 final a = await sim.system.spawn('a', () => Bouncer());
                 final b = await sim.system.spawn('b', () => Bouncer());
-                a.tell(LocalMessage(payload: 'x'), sender: b);
+                sendAs(b, () => a.tell('x'));
                 await Completer<void>().future;
               }, maxSteps: 500),
           throwsA(isA<SimulationLimitExceeded>()));
@@ -297,8 +295,8 @@ void main() {
     test('a dropped request times out', () {
       simulate((sim) async {
         final echo = await sim.system.spawn('echo', () => Echo());
-        await expectLater(echo.ask<String>(LocalMessage(payload: 'hi')),
-            throwsA(isA<TimeoutException>()));
+        await expectLater(
+            echo.ask<String>('hi'), throwsA(isA<TimeoutException>()));
       }, faults: (delivery) => Fault.drop);
     });
 

@@ -28,7 +28,7 @@ class Counter extends Actor {
 
   @override
   Future<void> onMessage(dynamic message) async {
-    peer.tell(LocalMessage(payload: [!() => count++!]));
+    peer.tell([!() => count++!]);
   }
 }
 ''');
@@ -50,9 +50,43 @@ class Boss extends Actor {
 
   @override
   Future<void> onMessage(dynamic message) async {
-    worker.tell(LocalMessage(payload: Job([!() {
+    worker.tell(Job([!() {
       finished++;
-    }!])));
+    }!]));
+  }
+}
+''');
+  }
+
+  Future<void> test_closureInLegacyLocalMessage() async {
+    await expectReported('''
+import 'package:dactor/dactor.dart';
+
+class Counter extends Actor {
+  final ActorRef peer;
+  Counter(this.peer);
+  int count = 0;
+
+  @override
+  Future<void> onMessage(dynamic message) async {
+    peer.tell(LocalMessage(payload: [!() => count++!]));
+  }
+}
+''');
+  }
+
+  Future<void> test_closureForwarded() async {
+    await expectReported('''
+import 'package:dactor/dactor.dart';
+
+class Router extends Actor {
+  final ActorRef worker;
+  Router(this.worker);
+  int routed = 0;
+
+  @override
+  Future<void> onMessage(dynamic message) async {
+    context.forward(worker, [!() => routed++!]);
   }
 }
 ''');
@@ -68,7 +102,7 @@ class Shy extends Actor {
 
   @override
   Future<void> onMessage(dynamic message) async {
-    peer.tell(LocalMessage(payload: [!this!]));
+    peer.tell([!this!]);
   }
 }
 ''');
@@ -99,8 +133,8 @@ class Polite extends Actor {
 
   @override
   Future<void> onMessage(dynamic message) async {
-    peer.tell(LocalMessage(payload: context.self));
-    peer.tell(LocalMessage(payload: 'data', sender: context.self));
+    peer.tell(context.self);
+    peer.tell('data');
   }
 }
 ''');
@@ -111,7 +145,7 @@ class Polite extends Actor {
 import 'package:dactor/dactor.dart';
 
 void send(ActorRef ref) {
-  ref.tell(LocalMessage(payload: () => 1));
+  ref.tell(() => 1);
 }
 ''');
   }

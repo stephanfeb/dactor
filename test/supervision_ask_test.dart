@@ -1,26 +1,14 @@
 import 'package:dactor/dactor.dart';
-import 'package:dactor_test/dactor_test.dart';
+import 'package:dactor/spi.dart';
+import 'support/probe.dart';
 import 'package:test/test.dart';
 import 'dart:async';
 
 /// Test message for supervision + ask testing
-class SupervisionTestMessage implements Message {
+class SupervisionTestMessage {
   final String data;
 
   SupervisionTestMessage(this.data);
-
-  @override
-  String get correlationId =>
-      'supervision-test-${DateTime.now().millisecondsSinceEpoch}';
-
-  @override
-  Map<String, dynamic> get metadata => {'data': data};
-
-  @override
-  ActorRef? get replyTo => null;
-
-  @override
-  DateTime get timestamp => DateTime.now();
 }
 
 /// Test response for supervision + ask testing
@@ -67,7 +55,7 @@ class TestChildActor extends Actor {
       print('TestChildActor($name): Processing String message: $message');
       print(
           'TestChildActor($name): Sending string response to sender: ${sender.id}');
-      sender.tell(LocalMessage(payload: 'echo_${message}_from_$name'));
+      sender.tell('echo_${message}_from_$name');
     } else {
       print('TestChildActor($name): Unknown message type, ignoring');
     }
@@ -103,7 +91,7 @@ class TestSupervisorActor extends SupervisorActor {
 
       print(
           'TestSupervisorActor: Child $childName created with ID: ${childRef.id}');
-      context.sender?.tell(LocalMessage(payload: 'child_created:$childName'));
+      context.sender?.tell('child_created:$childName');
     } else if (message is String && message.startsWith('ask_child:')) {
       final parts = message.split(':');
       final childName = parts[1];
@@ -120,8 +108,6 @@ class TestSupervisorActor extends SupervisorActor {
         final message = SupervisionTestMessage(testData);
         print(
             'TestSupervisorActor: Created message: ${message.runtimeType} with data: ${message.data}');
-        print(
-            'TestSupervisorActor: Message correlationId: ${message.correlationId}');
 
         try {
           print(
@@ -135,19 +121,16 @@ class TestSupervisorActor extends SupervisorActor {
           print('TestSupervisorActor: Got response from child: $response');
           print('TestSupervisorActor: Response type: ${response.runtimeType}');
           print('TestSupervisorActor: Response result: ${response.result}');
-          context.sender?.tell(LocalMessage(
-              payload: 'supervisor_got_response:${response.result}'));
+          context.sender?.tell('supervisor_got_response:${response.result}');
         } catch (e) {
           print('TestSupervisorActor: Ask failed with error: $e');
           print('TestSupervisorActor: Error type: ${e.runtimeType}');
-          context.sender
-              ?.tell(LocalMessage(payload: 'supervisor_ask_failed:$e'));
+          context.sender?.tell('supervisor_ask_failed:$e');
         }
       } else {
         print(
             'TestSupervisorActor: Child $childName not found in children map');
-        context.sender
-            ?.tell(LocalMessage(payload: 'child_not_found:$childName'));
+        context.sender?.tell('child_not_found:$childName');
       }
     }
   }
@@ -196,8 +179,7 @@ void main() {
           await system.spawn('test-supervisor', () => TestSupervisorActor());
 
       // Ask supervisor to create a child
-      supervisor.tell(LocalMessage(payload: 'create_child:test-child'),
-          sender: probe.ref);
+      sendAs(probe.ref, () => supervisor.tell('create_child:test-child'));
       await probe.expectMsg('child_created:test-child',
           timeout: Duration(seconds: 5));
 
@@ -212,15 +194,14 @@ void main() {
           await system.spawn('test-supervisor', () => TestSupervisorActor());
 
       // Ask supervisor to create a child
-      supervisor.tell(LocalMessage(payload: 'create_child:test-child'),
-          sender: probe.ref);
+      sendAs(probe.ref, () => supervisor.tell('create_child:test-child'));
       await probe.expectMsg('child_created:test-child',
           timeout: Duration(seconds: 5));
 
       // Now ask supervisor to ask the child (this should fail)
       print('Supervisor asking supervised child...');
-      supervisor.tell(LocalMessage(payload: 'ask_child:test-child:test_data'),
-          sender: probe.ref);
+      sendAs(
+          probe.ref, () => supervisor.tell('ask_child:test-child:test_data'));
 
       final askResponse =
           await probe.expectMsgType<dynamic>(timeout: Duration(seconds: 10));
@@ -245,8 +226,7 @@ void main() {
           await system.spawn('test-supervisor', () => TestSupervisorActor());
 
       // Ask supervisor to create a child
-      supervisor.tell(LocalMessage(payload: 'create_child:test-child'),
-          sender: probe.ref);
+      sendAs(probe.ref, () => supervisor.tell('create_child:test-child'));
       await probe.expectMsg('child_created:test-child',
           timeout: Duration(seconds: 5));
 
@@ -277,8 +257,7 @@ void main() {
           await system.spawn('test-supervisor', () => TestSupervisorActor());
 
       // Ask supervisor to create a child
-      supervisor.tell(LocalMessage(payload: 'create_child:test-child'),
-          sender: probe.ref);
+      sendAs(probe.ref, () => supervisor.tell('create_child:test-child'));
       await probe.expectMsg('child_created:test-child',
           timeout: Duration(seconds: 5));
 
@@ -289,7 +268,8 @@ void main() {
       print('Probe asking supervised child with ID: ${childRef!.id}');
 
       // Use tell + expectMsg pattern (like TestProbe ask)
-      childRef.tell(SupervisionTestMessage('probe_test'), sender: probe.ref);
+      sendAs(
+          probe.ref, () => childRef.tell(SupervisionTestMessage('probe_test')));
       final response = await probe.expectMsgType<SupervisionTestResponse>(
           timeout: Duration(seconds: 5));
 

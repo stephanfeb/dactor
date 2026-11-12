@@ -97,7 +97,7 @@ class GlobalNames {
     for (final loser in _groups.localMembers(name)) {
       if (loser == winner) continue;
       _groups.leave(name, loser);
-      loser.tell(LocalMessage(payload: NameConflict(name, winner)));
+      loser.tell(NameConflict(name, winner));
     }
   }
 }

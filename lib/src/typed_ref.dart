@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:dactor/src/actor_ref.dart';
-import 'package:dactor/src/local_message.dart';
 
 /// Mixed into a message that expects a reply of type [R].
 ///
@@ -21,6 +20,16 @@ mixin Call<R> {
   /// Answers this request through [from], for a handler that returned
   /// [NoReply] and replies later.
   void replyTo(From from, R value) => from.reply(value);
+
+  /// The answer [value] to this request, for `reply:` on a `GenStatem`
+  /// transition. Checks that [value] is an [R].
+  Answer answer(R value) => Answer._(value);
+}
+
+/// A checked answer to a request, made by [Call.answer].
+final class Answer {
+  final Object? value;
+  const Answer._(this.value);
 }
 
 /// What a `GenServer.handleCall` decided.
@@ -63,7 +72,7 @@ final class From {
 
   /// Sends [value] to the caller. Prefer [Call.replyTo], which checks the
   /// type of [value] against the request.
-  void reply(Object? value) => _caller?.tell(LocalMessage(payload: value));
+  void reply(Object? value) => _caller?.tell(value);
 }
 
 /// Sent to the caller in place of a reply when the handler threw.
@@ -100,8 +109,7 @@ extension type const TypedRef<M>(ActorRef untyped) {
   bool get isAlive => untyped.isAlive;
 
   /// Sends [message] and does not wait.
-  void tell(M message, {ActorRef? sender}) =>
-      untyped.tell(LocalMessage(payload: message), sender: sender);
+  void tell(M message) => untyped.tell(message);
 
   /// Sends [request] and completes with its reply.
   ///
@@ -113,8 +121,7 @@ extension type const TypedRef<M>(ActorRef untyped) {
       throw ArgumentError.value(
           request, 'request', 'is not a $M, which is all this actor accepts');
     }
-    final answer =
-        await untyped.ask<Object?>(LocalMessage(payload: request), timeout);
+    final answer = await untyped.ask<Object?>(request, timeout);
     if (answer is CallFailure) {
       throw CallException(untyped, request, answer.error);
     }

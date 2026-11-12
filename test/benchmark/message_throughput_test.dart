@@ -2,18 +2,13 @@ import 'package:dactor/dactor.dart';
 import 'package:test/test.dart';
 import 'dart:async';
 
-import 'package:dactor/src/local_actor_system.dart';
-import 'package:dactor/src/local_message.dart';
-import 'package:dactor/src/message.dart';
-import 'package:dactor/src/routing/pool.dart';
-
 class BenchmarkActor extends Actor {
   int count = 0;
 
   @override
   Future<void> onMessage(dynamic message) async {
     if (message == 'get_count') {
-      context.sender!.tell(LocalMessage(payload: count));
+      context.sender!.tell(count);
     } else {
       count++;
     }
@@ -39,11 +34,10 @@ void main() {
       final stopwatch = Stopwatch()..start();
 
       for (var i = 0; i < messageCount; i++) {
-        actor.tell(LocalMessage(payload: i));
+        actor.tell(i);
       }
 
-      final count = await actor.ask(
-          LocalMessage(payload: 'get_count'), const Duration(seconds: 5));
+      final count = await actor.ask('get_count', const Duration(seconds: 5));
       expect(count, messageCount);
 
       stopwatch.stop();
@@ -63,7 +57,7 @@ void main() {
       final stopwatch = Stopwatch()..start();
 
       for (var i = 0; i < messageCount; i++) {
-        pooledActor.tell(LocalMessage(payload: i));
+        pooledActor.tell(i);
       }
 
       // Wait for all messages to be processed

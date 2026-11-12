@@ -8,8 +8,6 @@ import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/sys.dart';
 import 'package:dactor/src/typed_ref.dart';
 
-const _noReply = Object();
-
 /// What a `GenStatem` handler decided. Build one with the helpers on
 /// [GenStatem]: `next`, `keep`, `postpone` and `halt`.
 final class Transition<S, D> {
@@ -18,18 +16,24 @@ final class Transition<S, D> {
   final D? _data;
   final bool _hasData;
   final Duration? _timeout;
-  final Object? _reply;
+  final Duration? _eventTimeout;
+  final Map<Object, Duration?> _timeouts;
+  final Answer? _reply;
 
   const Transition._(this._kind,
       {S? state,
       D? data,
       bool hasData = false,
       Duration? timeout,
-      Object? reply = _noReply})
+      Duration? eventTimeout,
+      Map<Object, Duration?> timeouts = const {},
+      Answer? reply})
       : _state = state,
         _data = data,
         _hasData = hasData,
         _timeout = timeout,
+        _eventTimeout = eventTimeout,
+        _timeouts = timeouts,
         _reply = reply;
 }
 
@@ -38,6 +42,17 @@ enum _Kind { next, keep, postpone, halt }
 final class _StateTimeout {
   final int generation;
   const _StateTimeout(this.generation);
+}
+
+final class _EventTimeout {
+  final int generation;
+  const _EventTimeout(this.generation);
+}
+
+final class _GenericTimeout {
+  final Object name;
+  final int generation;
+  const _GenericTimeout(this.name, this.generation);
 }
 
 /// A state machine actor, in the manner of OTP's `gen_statem`.
@@ -53,15 +68,30 @@ final class _StateTimeout {
 /// - [postpone] stays and puts the event aside until the state changes.
 /// - [halt] stops the machine.
 ///
-/// A state timeout, given as `timeout:` on [next] or [keep], calls
-/// [onTimeout] if the machine is still in that state when it runs out.
+/// Three kinds of timeout, as in OTP:
+///
+/// - A state timeout, `timeout:` on [next] or [keep], calls [onTimeout] if
+///   the machine is still in that state when it runs out.
+/// - An event timeout, `eventTimeout:`, calls [onEventTimeout] if no message
+///   at all arrives before it runs out.
+/// - Generic timeouts, `timeouts: {name: duration}`, call [onGenericTimeout]
+///   with their name. They survive changes of state; setting one again
+///   restarts it, and setting it to null cancels it.
+///
+/// A request that mixes in `Call<R>` is answered with `reply:` on any
+/// transition, given as `request.answer(value)`, which checks that the
+/// value is an `R`.
 abstract class GenStatem<S, D, M> extends Actor implements StatefulBehaviour {
   static const _timerKey = 'dactor.statem.state_timeout';
+  static const _eventTimerKey = 'dactor.statem.event_timeout';
+  static const _genericTimerPrefix = 'dactor.statem.timeout/';
 
   late S _state;
   late D _data;
   bool _initialised = false;
   int _timeoutGeneration = 0;
+  int _eventTimeoutGeneration = 0;
+  final _genericGenerations = <Object, int>{};
   var _postponed = Queue<(M, ActorRef?)>();
 
   /// The state and data the machine starts with.
@@ -75,6 +105,16 @@ abstract class GenStatem<S, D, M> extends Actor implements StatefulBehaviour {
   /// Called when the state timeout runs out. The default stays.
   @protected
   FutureOr<Transition<S, D>> onTimeout(S state, D data) => keep();
+
+  /// Called when the event timeout runs out: no message arrived in time.
+  /// The default stays.
+  @protected
+  FutureOr<Transition<S, D>> onEventTimeout(S state, D data) => keep();
+
+  /// Called when the generic timeout [name] runs out. The default stays.
+  @protected
+  FutureOr<Transition<S, D>> onGenericTimeout(Object name, S state, D data) =>
+      keep();
 
   /// Handles a message that is not an [M]. The default ignores it.
   @protected
@@ -103,25 +143,42 @@ abstract class GenStatem<S, D, M> extends Actor implements StatefulBehaviour {
   FutureOr<(S, D)> codeChange(int oldVersion, Object? old) => old as (S, D);
 
   /// Move to [state]. [data] replaces the data if given. [reply] answers the
-  /// caller of the event being handled. [timeout] starts a state timeout for
-  /// the new state.
+  /// caller of the event being handled: `request.answer(value)`. [timeout]
+  /// starts a state timeout for the new state, [eventTimeout] an event
+  /// timeout, and [timeouts] sets or (with null) cancels generic timeouts.
   @protected
   Transition<S, D> next(S state,
-          {D? data, Object? reply = _noReply, Duration? timeout}) =>
+          {D? data,
+          Answer? reply,
+          Duration? timeout,
+          Duration? eventTimeout,
+          Map<Object, Duration?> timeouts = const {}}) =>
       Transition._(_Kind.next,
           state: state,
           data: data,
           hasData: data != null,
           reply: reply,
-          timeout: timeout);
+          timeout: timeout,
+          eventTimeout: eventTimeout,
+          timeouts: timeouts);
 
   /// Stay in the current state. A [timeout] restarts the state timeout;
-  /// without one, a running timeout keeps running.
+  /// without one, a running timeout keeps running. The rest is as for
+  /// [next].
   @protected
   Transition<S, D> keep(
-          {D? data, Object? reply = _noReply, Duration? timeout}) =>
+          {D? data,
+          Answer? reply,
+          Duration? timeout,
+          Duration? eventTimeout,
+          Map<Object, Duration?> timeouts = const {}}) =>
       Transition._(_Kind.keep,
-          data: data, hasData: data != null, reply: reply, timeout: timeout);
+          data: data,
+          hasData: data != null,
+          reply: reply,
+          timeout: timeout,
+          eventTimeout: eventTimeout,
+          timeouts: timeouts);
 
   /// Stay, and handle the event again after the next change of state.
   @protected
@@ -129,7 +186,7 @@ abstract class GenStatem<S, D, M> extends Actor implements StatefulBehaviour {
 
   /// Stop the machine once this handler has returned.
   @protected
-  Transition<S, D> halt({Object? reply = _noReply}) =>
+  Transition<S, D> halt({Answer? reply}) =>
       Transition._(_Kind.halt, reply: reply);
 
   /// The current state. Meant for tests; handlers get it as an argument.
@@ -189,16 +246,31 @@ abstract class GenStatem<S, D, M> extends Actor implements StatefulBehaviour {
   Future<void> onMessage(dynamic message) async {
     final sender = context.sender;
     final Transition<S, D> transition;
+    // A stale timeout is not an event: it neither runs nor cancels anything.
+    if (message is _StateTimeout && message.generation != _timeoutGeneration ||
+        message is _EventTimeout &&
+            message.generation != _eventTimeoutGeneration ||
+        message is _GenericTimeout &&
+            message.generation != _genericGenerations[message.name]) {
+      return;
+    }
+    // Any other message cancels the event timeout, its own included.
+    if (message is! _EventTimeout) _cancelEventTimeout();
+    _eventTimeoutGeneration++;
     if (message is _StateTimeout) {
-      if (message.generation != _timeoutGeneration) return;
       transition = await onTimeout(_state, _data);
+    } else if (message is _EventTimeout) {
+      transition = await onEventTimeout(_state, _data);
+    } else if (message is _GenericTimeout) {
+      _genericGenerations.remove(message.name);
+      transition = await onGenericTimeout(message.name, _state, _data);
     } else if (message is M) {
       transition = await _handleEvent(message, sender);
     } else {
       transition = await onInfo(_state, message, _data);
     }
     if (transition._kind == _Kind.postpone) {
-      if (message is M && message is! _StateTimeout) {
+      if (message is M) {
         _postponed.add((message, sender));
       }
       return;
@@ -242,12 +314,20 @@ abstract class GenStatem<S, D, M> extends Actor implements StatefulBehaviour {
   /// Carries out [transition] and returns whether the state changed.
   Future<bool> _apply(Transition<S, D> transition, ActorRef? sender) async {
     if (transition._hasData) _data = transition._data as D;
-    if (!identical(transition._reply, _noReply)) {
-      From(sender).reply(transition._reply);
+    final reply = transition._reply;
+    if (reply != null) From(sender).reply(reply.value);
+    for (final MapEntry(key: name, value: after)
+        in transition._timeouts.entries) {
+      _setGeneric(name, after);
     }
+    if (transition._eventTimeout case final after?) _armEventTimeout(after);
     switch (transition._kind) {
       case _Kind.halt:
         _cancelTimeout();
+        _cancelEventTimeout();
+        for (final name in _genericGenerations.keys.toList()) {
+          _setGeneric(name, null);
+        }
         unawaited(context.system.stop(context.self));
         return false;
       case _Kind.keep:
@@ -280,6 +360,27 @@ abstract class GenStatem<S, D, M> extends Actor implements StatefulBehaviour {
   void _cancelTimeout() {
     _timeoutGeneration++;
     context.timers.cancel(_timerKey);
+  }
+
+  void _armEventTimeout(Duration after) {
+    _eventTimeoutGeneration++;
+    context.timers.startSingleTimer(
+        _eventTimerKey, _EventTimeout(_eventTimeoutGeneration), after);
+  }
+
+  void _cancelEventTimeout() => context.timers.cancel(_eventTimerKey);
+
+  void _setGeneric(Object name, Duration? after) {
+    final key = '$_genericTimerPrefix$name';
+    if (after == null) {
+      _genericGenerations.remove(name);
+      context.timers.cancel(key);
+      return;
+    }
+    final generation = (_genericGenerations[name] ?? 0) + 1;
+    _genericGenerations[name] = generation;
+    context.timers
+        .startSingleTimer(key, _GenericTimeout(name, generation), after);
   }
 
   @override

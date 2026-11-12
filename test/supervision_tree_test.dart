@@ -100,7 +100,7 @@ void main() {
       final first = mid;
       _log.clear();
 
-      system.getActor('grand/mid/leaf')!.tell(LocalMessage(payload: 'boom'));
+      system.getActor('grand/mid/leaf')!.tell('boom');
       await _settle();
 
       // The grandparent restarted mid; mid's children went down with the old
@@ -122,7 +122,7 @@ void main() {
           'top',
           () => _Sup('top', _always(SupervisionDecision.escalate),
               kids: ['leaf']));
-      system.getActor('top/leaf')!.tell(LocalMessage(payload: 'boom'));
+      system.getActor('top/leaf')!.tell('boom');
       await _settle();
       expect(top.isAlive, isFalse);
       expect(system.getActor('top/leaf'), isNull);
@@ -131,8 +131,8 @@ void main() {
     test('spawn(supervision:) governs a top-level actor', () async {
       final ref = await system.spawn('solo', () => _Leaf('solo'),
           supervision: _always(SupervisionDecision.restart));
-      ref.tell(LocalMessage(payload: 'boom'));
-      ref.tell(LocalMessage(payload: 'after'));
+      ref.tell('boom');
+      ref.tell('after');
       await _settle();
       expect(ref.isAlive, isTrue);
       expect(_log, [
@@ -147,15 +147,15 @@ void main() {
     test('resume keeps a top-level actor and its state', () async {
       final ref = await system.spawn('solo', () => _Leaf('solo'),
           supervision: _always(SupervisionDecision.resume));
-      ref.tell(LocalMessage(payload: 'boom'));
-      ref.tell(LocalMessage(payload: 'after'));
+      ref.tell('boom');
+      ref.tell('after');
       await _settle();
       expect(_log, ['start:solo', 'error:solo', 'solo:after']);
     });
 
     test('a top-level actor with no strategy is stopped on failure', () async {
       final ref = await system.spawn('solo', () => _Leaf('solo'));
-      ref.tell(LocalMessage(payload: 'boom'));
+      ref.tell('boom');
       await _settle();
       expect(ref.isAlive, isFalse);
     });
@@ -167,8 +167,8 @@ void main() {
               AllForOneStrategy(decider: (e, s) => SupervisionDecision.restart),
               kids: ['a', 'b']));
       _log.clear();
-      system.getActor('top/a')!.tell(LocalMessage(payload: 'boom'));
-      system.getActor('top/b')!.tell(LocalMessage(payload: 'boom'));
+      system.getActor('top/a')!.tell('boom');
+      system.getActor('top/b')!.tell('boom');
       await _settle();
       expect(_log.where((l) => l == 'start:a').length, 1);
       expect(_log.where((l) => l == 'start:b').length, 1);

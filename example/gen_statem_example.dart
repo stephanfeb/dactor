@@ -37,7 +37,7 @@ class CodeLock extends GenStatem<Door, List<int>, DoorEvent> {
   Transition<Door, List<int>> onEvent(
           Door state, DoorEvent event, List<int> data) =>
       switch ((state, event)) {
-        (_, IsOpen()) => keep(reply: state == Door.open),
+        (_, final IsOpen q) => keep(reply: q.answer(state == Door.open)),
         (Door.locked, Digit(:final digit)) => _entered([...data, digit]),
         // Not yet: try again when the state changes.
         (Door.locked, Push()) => postpone(),

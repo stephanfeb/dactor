@@ -1,13 +1,13 @@
 import 'package:dactor/dactor.dart';
-import 'package:dactor/src/tracing/tracing.dart';
-import 'package:dactor_test/dactor_test.dart';
+import 'package:dactor/spi.dart';
+import 'support/probe.dart';
 import 'package:test/test.dart';
 
 class TestActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (message.toString() == 'hello') {
-      context.sender?.tell(LocalMessage(payload: 'world'));
+      context.sender?.tell('world');
     }
   }
 }
@@ -30,14 +30,14 @@ void main() {
       final probe = await system.createProbe();
       final actor = await system.spawn('test', () => TestActor());
 
-      final message = LocalMessage(payload: 'hello', sender: probe.ref);
-      actor.tell(message);
+      sendAs(probe.ref, () => actor.tell('hello'));
 
       await Future.delayed(const Duration(milliseconds: 100));
 
-      final trace = collector.traces[message.correlationId];
-      expect(trace, isNotNull);
-      expect(trace!.length, 2);
+      // One id ties the message's events together.
+      final trace = collector.traces.values
+          .singleWhere((events) => events.first.message == 'hello');
+      expect(trace.length, 2);
       expect(trace[0].event, 'sent');
       expect(trace[1].event, 'processed');
     });

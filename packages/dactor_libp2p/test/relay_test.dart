@@ -1,7 +1,6 @@
 @Timeout(Duration(seconds: 90))
 library;
 
-import 'package:dactor/dactor.dart';
 import 'package:dactor_libp2p/dactor_libp2p.dart';
 import 'package:dart_libp2p/dart_libp2p.dart' show PeerId;
 import 'package:test/test.dart';
@@ -73,11 +72,9 @@ void main() {
         'bob', await phone.system.spawn('bob', () => Agent('bob', log)));
     final bob = await server.remote.lookup(phone.id, 'bob');
 
-    expect(
-        await bob.ask<String>(LocalMessage(payload: 'ping')), 'pong from bob');
-    await alice.ask<String>(LocalMessage(payload: Introduce('bob', bob)));
-    expect(await alice.ask<String>(LocalMessage(payload: ('ask', 'bob'))),
-        'relayed: pong from bob');
+    expect(await bob.ask<String>('ping'), 'pong from bob');
+    await alice.ask<String>(Introduce('bob', bob));
+    expect(await alice.ask<String>(('ask', 'bob')), 'relayed: pong from bob');
 
     // Every connection between them goes through the relay.
     final conns = serverTransport.host.network
@@ -99,9 +96,9 @@ void main() {
     // connection, through the relay.
     await server.remote.lookup(phone.id, 'carol');
     final alice = await phone.remote.lookup(server.id, 'alice');
-    await carol.ask<String>(LocalMessage(payload: Introduce('alice', alice)));
-    expect(await carol.ask<String>(LocalMessage(payload: ('ask', 'alice'))),
-        'relayed: pong from alice');
+    await carol.ask<String>(Introduce('alice', alice));
+    expect(
+        await carol.ask<String>(('ask', 'alice')), 'relayed: pong from alice');
   });
 
   test('losing the relay is noticed on both sides', () async {
@@ -112,12 +109,11 @@ void main() {
         'bob', await phone.system.spawn('bob', () => Agent('bob', log)));
 
     final bob = await server.remote.lookup(phone.id, 'bob');
-    await alice.ask<String>(LocalMessage(payload: Introduce('bob', bob)));
-    await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+    await alice.ask<String>(Introduce('bob', bob));
+    await alice.ask<String>(('watch', 'bob'));
     final aliceFromPhone = await phone.remote.lookup(server.id, 'alice');
-    await carol
-        .ask<String>(LocalMessage(payload: Introduce('alice', aliceFromPhone)));
-    await carol.ask<String>(LocalMessage(payload: ('watch', 'alice')));
+    await carol.ask<String>(Introduce('alice', aliceFromPhone));
+    await carol.ask<String>(('watch', 'alice'));
     await Future<void>.delayed(const Duration(milliseconds: 200));
 
     final watch = Stopwatch()..start();

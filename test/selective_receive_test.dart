@@ -55,8 +55,7 @@ void main() {
   Future<void> settle([int ms = 15]) =>
       Future<void>.delayed(Duration(milliseconds: ms));
 
-  void send(ActorRef ref, Object message) =>
-      ref.tell(LocalMessage(payload: message));
+  void send(ActorRef ref, Object message) => ref.tell(message);
 
   test('takes a matching message that arrives later, out of order', () async {
     final ref = await system.spawn('w', () => Waiter(2));

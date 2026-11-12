@@ -1,5 +1,4 @@
 import 'exit_reason.dart';
-import 'message.dart';
 
 /// A reference to an actor, which can be used to send messages to it.
 ///
@@ -12,37 +11,24 @@ abstract class ActorRef {
   /// Whether the actor is still alive.
   bool get isAlive;
 
-  /// Sends a message to the actor.
+  /// Sends [message] to the actor. Any value will do; the actor's
+  /// `onMessage` receives it as it is.
   ///
-  /// This is a fire-and-forget operation. The message is sent asynchronously
-  /// and there is no guarantee of delivery.
-  void tell(Message message, {ActorRef? sender});
+  /// Fire and forget: nothing says whether it arrived. The sender the actor
+  /// sees as `context.sender` is the actor whose code is calling `tell`, or
+  /// null outside any actor; it cannot be chosen. To pass a message on with
+  /// its original sender, use `ActorContext.forward`.
+  ///
+  /// A `Terminated` or `ExitSignal` told this way is dropped: only the
+  /// runtime sends those.
+  void tell(Object? message);
 
-  /// Sends a message to the actor and returns a future that completes with the
-  /// response.
+  /// Sends [message] and waits for the actor's answer, which must be a [T].
   ///
-  /// This is a request-response operation. The message is sent asynchronously
-  /// and the future completes with the response from the actor.
-  ///
-  /// **Important**: For ask operations, response messages should extend [LocalMessage]
-  /// and override the `payload` getter to return `this` (the response object itself).
-  /// This ensures proper type casting and response handling.
-  ///
-  /// Example:
-  /// ```dart
-  /// class MyResponse extends LocalMessage {
-  ///   final String result;
-  ///   MyResponse(this.result) : super(payload: null);
-  ///   @override
-  ///   dynamic get payload => this;
-  /// }
-  /// ```
-  ///
-  /// The request message can be either a [Message] or [LocalMessage]. If a regular
-  /// [Message] is provided, it will be automatically wrapped in a [LocalMessage].
-  ///
-  /// If [timeout] is null, the default timeout from the actor system configuration is used.
-  Future<T> ask<T>(Message message, [Duration? timeout]);
+  /// The actor answers by telling `context.sender`. Fails with a
+  /// `TimeoutException` if no answer comes within [timeout], or the system's
+  /// default when it is null.
+  Future<T> ask<T>(Object? message, [Duration? timeout]);
 
   /// Registers the current actor to watch the target actor.
   ///

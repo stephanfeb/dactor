@@ -1,4 +1,3 @@
-import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/local_message.dart';
 
 /// A base class for messages that are designed to work seamlessly with the ask pattern.
@@ -20,21 +19,16 @@ import 'package:dactor/src/local_message.dart';
 ///   MyResponse(this.result);
 /// }
 /// ```
+@Deprecated('Ask with any value: ref.ask<Reply>(request). Removed in 3.0.')
+// ignore: deprecated_member_use_from_same_package
 abstract class AskableMessage extends LocalMessage {
   AskableMessage({
-    ActorRef? sender,
-    String? correlationId,
-    ActorRef? replyTo,
-    DateTime? timestamp,
-    Map<String, dynamic>? metadata,
-  }) : super(
-          payload: null, // Will be overridden by getter
-          sender: sender,
-          correlationId: correlationId,
-          replyTo: replyTo,
-          timestamp: timestamp,
-          metadata: metadata,
-        );
+    super.sender,
+    super.correlationId,
+    super.replyTo,
+    super.timestamp,
+    super.metadata,
+  }) : super(payload: null); // the payload getter returns this
 
   @override
   dynamic get payload => this; // Return the message itself
@@ -54,21 +48,17 @@ abstract class AskableMessage extends LocalMessage {
 ///   ProcessingResult({required this.success, required this.message});
 /// }
 /// ```
+@Deprecated('Answer with any value: context.sender?.tell(reply). '
+    'Removed in 3.0.')
+// ignore: deprecated_member_use_from_same_package
 abstract class AskableResponse extends LocalMessage {
   AskableResponse({
-    ActorRef? sender,
-    String? correlationId,
-    ActorRef? replyTo,
-    DateTime? timestamp,
-    Map<String, dynamic>? metadata,
-  }) : super(
-          payload: null, // Will be overridden by getter
-          sender: sender,
-          correlationId: correlationId,
-          replyTo: replyTo,
-          timestamp: timestamp,
-          metadata: metadata,
-        );
+    super.sender,
+    super.correlationId,
+    super.replyTo,
+    super.timestamp,
+    super.metadata,
+  }) : super(payload: null); // the payload getter returns this
 
   @override
   dynamic get payload => this; // Return the response itself

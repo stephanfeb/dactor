@@ -6,7 +6,6 @@ import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/actor_system.dart';
 import 'package:dactor/src/clock.dart';
 import 'package:dactor/src/local_actor_system.dart';
-import 'package:dactor/src/local_message.dart';
 import 'package:dactor/src/logging/logging.dart';
 
 /// A message a simulated system is about to hand to an actor.
@@ -322,8 +321,8 @@ class Simulation {
 
   StepFault _onDelivery(StepDelivery delivery) {
     final message = delivery.message;
-    final payload = message is LocalMessage ? message.payload : message;
-    final sender = message is LocalMessage ? message.sender : null;
+    final payload = message.payload;
+    final sender = message.sender;
     final target = delivery.target;
     if (delivery.isSystem) {
       _trace.add('+${_ms(_now)} system  ${target.id} <- '
@@ -338,7 +337,7 @@ class Simulation {
       case _Delay(:final after):
         _trace.add('+${_ms(_now)} delay   ${target.id} <- ${_short(payload)} '
             'by ${_ms(after)}');
-        _zone.createTimer(after, () => target.tell(message));
+        _zone.createTimer(after, () => target.redeliver(message));
         return StepFault.skip;
       case _Simple(:final name):
         _trace.add(

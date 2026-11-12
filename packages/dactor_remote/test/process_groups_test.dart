@@ -67,8 +67,7 @@ void main() {
     groups['a']!.connect('b');
     await settle();
     final bob = groups['a']!.members('echo').single;
-    expect(
-        await bob.ask<String>(LocalMessage(payload: 'ping')), 'pong from bob');
+    expect(await bob.ask<String>('ping'), 'pong from bob');
   });
 
   test('leave, and a member that ends, are seen everywhere', () async {

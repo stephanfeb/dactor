@@ -53,10 +53,9 @@ void main() {
 
     final bob = node.resolve(bobUri);
     final alice = await system.spawn('alice', () => Agent('alice', log));
-    await alice.ask<String>(LocalMessage(payload: Introduce('bob', bob)));
-    expect(await alice.ask<String>(LocalMessage(payload: ('ask', 'bob'))),
-        'relayed: pong from bob');
-    await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+    await alice.ask<String>(Introduce('bob', bob));
+    expect(await alice.ask<String>(('ask', 'bob')), 'relayed: pong from bob');
+    await alice.ask<String>(('watch', 'bob'));
     await Future<void>.delayed(const Duration(milliseconds: 200));
 
     final watch = Stopwatch()..start();

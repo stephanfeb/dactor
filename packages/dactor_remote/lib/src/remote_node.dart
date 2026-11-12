@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:dactor/dactor.dart';
+import 'package:dactor/spi.dart';
 
 import 'cbor.dart';
 import 'codec.dart';
@@ -80,7 +81,7 @@ const _fRefs = 17;
 ///
 /// // On another node:
 /// final orders = await node.lookup('server-1', 'orders');
-/// orders.tell(LocalMessage(payload: 'hello'));
+/// orders.tell('hello');
 /// ```
 ///
 /// A reference to an actor on another node is an ordinary [ActorRef]:
@@ -528,8 +529,8 @@ class RemoteNode implements TransportListener {
         for (final key in _watching.keys.where((k) => k.$1 == node).toList()) {
           final ref = RemoteRef._(this, node, key.$2, null);
           for (final watcher in _watching.remove(key)!) {
-            watcher.tell(LocalMessage(
-                payload: Terminated(ref, reason: const NoConnectionExit())));
+            tellSystem(
+                watcher, Terminated(ref, reason: const NoConnectionExit()));
           }
         }
 
@@ -645,7 +646,7 @@ class RemoteNode implements TransportListener {
         : frame[_fSender] == null
             ? null
             : _context.decodeRef(frame[_fSender]);
-    target.tell(LocalMessage(payload: payload), sender: sender);
+    sendAs(sender, () => target.tell(payload));
   }
 
   void _onReply(String from, Map<Object?, Object?> frame) {
@@ -693,7 +694,7 @@ class RemoteNode implements TransportListener {
     final terminated = Terminated(RemoteRef._(this, from, path, null),
         reason: _decodeReason(frame[_fReason]));
     for (final watcher in watchers) {
-      watcher.tell(LocalMessage(payload: terminated));
+      tellSystem(watcher, terminated);
     }
   }
 
@@ -874,15 +875,12 @@ final class RemoteRef implements ForeignActorRef {
   bool get isAlive => !_node._closed;
 
   @override
-  void tell(Message message, {ActorRef? sender}) {
-    final local = message is LocalMessage ? message : null;
-    _node._tell(
-        this, local == null ? message : local.payload, sender ?? local?.sender);
-  }
+  void tell(Object? message) =>
+      _node._tell(this, _unwrap(message), currentSender);
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) => _node._ask<T>(
-      this, message is LocalMessage ? message.payload : message, timeout);
+  Future<T> ask<T>(Object? message, [Duration? timeout]) =>
+      _node._ask<T>(this, _unwrap(message), timeout);
 
   @override
   void watch(ActorRef watcher) => _node._watch(this, watcher);
@@ -927,15 +925,14 @@ class _ReplyRef implements ActorRef {
   bool get isAlive => !_used && !_node._closed;
 
   @override
-  void tell(Message message, {ActorRef? sender}) {
+  void tell(Object? message) {
     if (_used) return;
     _used = true;
-    _node._reply(
-        _to, _correlation, message is LocalMessage ? message.payload : message);
+    _node._reply(_to, _correlation, _unwrap(message));
   }
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) =>
+  Future<T> ask<T>(Object? message, [Duration? timeout]) =>
       throw UnsupportedError('Cannot ask the sender of an ask');
 
   @override
@@ -960,8 +957,8 @@ class _WatchRelay implements ActorRef {
   bool get isAlive => !_node._closed;
 
   @override
-  void tell(Message message, {ActorRef? sender}) {
-    final payload = message is LocalMessage ? message.payload : message;
+  void tell(Object? message) {
+    final payload = _unwrap(message);
     if (payload is! Terminated) return;
     _node._relays[_to]?.remove(_watched);
     _node._send(_to, {
@@ -972,7 +969,7 @@ class _WatchRelay implements ActorRef {
   }
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) =>
+  Future<T> ask<T>(Object? message, [Duration? timeout]) =>
       throw UnsupportedError('Not an actor');
 
   @override
@@ -1004,15 +1001,15 @@ class _Gone implements ActorRef {
   bool get isAlive => false;
 
   @override
-  void tell(Message message, {ActorRef? sender}) {}
+  void tell(Object? message) {}
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) =>
+  Future<T> ask<T>(Object? message, [Duration? timeout]) =>
       Future.error(StateError('Actor $id is not alive'));
 
   @override
-  void watch(ActorRef watcher) => watcher.tell(
-      LocalMessage(payload: Terminated(this, reason: const NoProcExit())));
+  void watch(ActorRef watcher) =>
+      tellSystem(watcher, Terminated(this, reason: const NoProcExit()));
 
   @override
   void unwatch(ActorRef watcher) {}
@@ -1047,3 +1044,8 @@ Uint8List _unhex(String text) {
       int.parse(text.substring(i, i + 2), radix: 16)
   ]);
 }
+
+/// [message], or its payload if it is a deprecated `LocalMessage`.
+Object? _unwrap(Object? message) =>
+    // ignore: deprecated_member_use
+    message is LocalMessage ? message.payload : message;

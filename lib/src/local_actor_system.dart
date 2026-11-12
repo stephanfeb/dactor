@@ -1,3 +1,5 @@
+// The system calls the lifecycle hooks that actors and supervisors protect.
+// ignore_for_file: invalid_use_of_protected_member
 import 'dart:async';
 import 'dart:collection';
 
@@ -8,8 +10,7 @@ import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/actor_zone.dart';
 import 'package:dactor/src/actor_system.dart';
 import 'package:dactor/src/local_actor_ref.dart';
-import 'package:dactor/src/local_message.dart';
-import 'package:dactor/src/message.dart';
+import 'package:dactor/src/sending.dart';
 import 'package:dactor/src/dead_letter_queue.dart';
 import 'package:dactor/src/mailbox.dart';
 import 'package:dactor/src/metrics/metrics.dart';
@@ -70,7 +71,7 @@ final class _ReplaceState extends _SysRequest {
 @internal
 class StepDelivery {
   final LocalActorRef target;
-  final Message message;
+  final Envelope message;
 
   /// True for supervision signals and `sys` requests, which are delivered
   /// whatever the hook answers.
@@ -120,6 +121,16 @@ class _Incarnation extends TombstoneZone {
   final LocalActorSystem system;
   final String id;
   final Actor actor;
+
+  @override
+  ActorRef? get self {
+    try {
+      return actor.context.self;
+    } on Error {
+      // No context yet: the constructor is still running.
+      return null;
+    }
+  }
 
   /// `preStart` completed, so this incarnation is owed a `postStop`.
   bool preStarted = false;
@@ -607,7 +618,7 @@ class LocalActorSystem implements ActorSystem {
     final inc = info.inc;
     if (_isShutdown || inc.retiring || inc.isDead) return;
     if ((inc.actor.context as _ActorContext).trapExits) {
-      actorRef.tell(LocalMessage(payload: ExitSignal(from, reason)));
+      Sending.system(actorRef, ExitSignal(from, reason));
     } else if (!reason.isNormal) {
       _fail(info, actorRef, inc, LinkedActorExited(from, reason),
           StackTrace.current,
@@ -779,7 +790,7 @@ class LocalActorSystem implements ActorSystem {
 
     var crash = false;
     if (fault != null) {
-      final payload = message is LocalMessage ? message.payload : message;
+      final payload = message.payload;
       final isSystem = payload is _SupervisionSignal || payload is _SysRequest;
       final decided = fault(StepDelivery(actorRef, message, isSystem));
       // System messages are shown to the hook, never interfered with.
@@ -859,7 +870,8 @@ class LocalActorSystem implements ActorSystem {
   /// The handler's future is observed from the system zone. If the actor is
   /// killed that future never completes, so the kill settles the bookkeeping
   /// through [_Incarnation.abandon] instead.
-  void _processMessage(_ActorInfo info, LocalActorRef actorRef, Message message,
+  void _processMessage(
+      _ActorInfo info, LocalActorRef actorRef, Envelope message,
       {bool crash = false}) {
     final stopwatch = Stopwatch()..start();
     // Pin the incarnation that handles this message; a restart during the
@@ -893,15 +905,9 @@ class LocalActorSystem implements ActorSystem {
     inc.busy = true;
     inc.abandon = finish;
 
-    final Object? payload;
-    if (message is LocalMessage) {
-      context.sender = message.sender;
-      tracer.record(TraceEvent(
-          message.correlationId, 'processed', actorRef, message.payload));
-      payload = message.payload;
-    } else {
-      payload = message;
-    }
+    final payload = message.payload;
+    context.sender = message.sender;
+    tracer.record(TraceEvent(message.traceId, 'processed', actorRef, payload));
     if (info.traced &&
         payload is! _SupervisionSignal &&
         payload is! _SysRequest) {
@@ -955,8 +961,8 @@ class LocalActorSystem implements ActorSystem {
   void _flushTerminated(ActorRef watcher, ActorRef watched) {
     final mailbox = _actorInfo[watcher.id]?.mailbox;
     if (mailbox == null) return;
-    bool isFrom(Message message) {
-      final payload = message is LocalMessage ? message.payload : message;
+    bool isFrom(Envelope message) {
+      final payload = message.payload;
       return payload is Terminated && payload.actor == watched;
     }
 
@@ -968,11 +974,11 @@ class LocalActorSystem implements ActorSystem {
   bool _feedReceive(_ActorInfo info) {
     final pending = info.pendingReceive;
     if (pending == null) return false;
-    final match = info.mailbox.takeFirstWhere((message) =>
-        pending.test(message is LocalMessage ? message.payload : message));
+    final match =
+        info.mailbox.takeFirstWhere((message) => pending.test(message.payload));
     if (match == null) return false;
     info.pendingReceive = null;
-    pending.done.complete(match is LocalMessage ? match.payload : match);
+    pending.done.complete(match.payload);
     return true;
   }
 
@@ -1134,7 +1140,7 @@ class LocalActorSystem implements ActorSystem {
         return;
       }
       final signal = _ChildFailed(actorRef, info, failed, error, stackTrace);
-      parentInfo.mailbox.enqueueSystem(LocalMessage(payload: signal));
+      parentInfo.mailbox.enqueueSystem(Envelope(signal, null));
       // If the supervisor dies before it answers, this never completes; its
       // children are stopped along with it.
       final decision = await signal.decision.future;
@@ -1359,8 +1365,7 @@ class LocalActorSystem implements ActorSystem {
     final actorRef = _actors[actor.id];
     if (actorRef is! LocalActorRef) {
       metrics.increment('actors.stop_failed');
-      deadLetterQueue.enqueue(
-          LocalMessage(payload: 'Message to non-existent actor: ${actor.id}'));
+      deadLetterQueue.enqueue(DeadLetter('stop', null, actor));
       return Future<void>.value();
     }
     final info = _actorInfo[actor.id];
@@ -1413,8 +1418,8 @@ class LocalActorSystem implements ActorSystem {
             parent.actor is Supervisor &&
             !parent.inc.retiring &&
             parent.stopping == null) {
-          parent.mailbox.enqueueSystem(
-              LocalMessage(payload: _ChildExited(actorRef, reason)));
+          parent.mailbox
+              .enqueueSystem(Envelope(_ChildExited(actorRef, reason), null));
         }
       }
     }
@@ -1472,7 +1477,7 @@ class _Sys implements Sys {
   }
 
   Future<Object?> _ask(ActorRef actor, _SysRequest request, Duration? timeout) {
-    _info(actor).mailbox.enqueueSystem(LocalMessage(payload: request));
+    _info(actor).mailbox.enqueueSystem(Envelope(request, null));
     return request.done.future.timeout(timeout ?? _system._stopTimeout,
         onTimeout: () {
       throw TimeoutException(
@@ -1558,6 +1563,10 @@ class _ActorContext implements ActorContext, BehaviourContext {
   }
 
   @override
+  void forward(ActorRef target, Object? message) =>
+      Sending.as(sender, () => target.tell(message));
+
+  @override
   bool trapExits = false;
 
   BehaviourHandoff? _handoff;
@@ -1567,6 +1576,13 @@ class _ActorContext implements ActorContext, BehaviourContext {
     final handoff = _handoff;
     _handoff = null;
     return handoff;
+  }
+
+  @override
+  void deliverFirst(Object? message) {
+    final info = system._actorInfo[self.id];
+    if (info == null || !identical(system._actors[self.id], self)) return;
+    info.mailbox.enqueueFirst(Envelope(message, null));
   }
 
   @override

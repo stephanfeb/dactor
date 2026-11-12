@@ -70,7 +70,7 @@ void main() {
   group('getState', () {
     test('returns the actor itself for a plain actor', () async {
       final ref = await system.spawn('plain', () => Plain());
-      ref.tell(LocalMessage(payload: 'a'));
+      ref.tell('a');
       await settle();
       final state = await system.sys.getState(ref);
       expect(state, isA<Plain>().having((p) => p.seen, 'seen', 1));
@@ -78,8 +78,8 @@ void main() {
 
     test('returns the state value of a behaviour', () async {
       final ref = await system.spawn('tally', () => Tally());
-      ref.tell(LocalMessage(payload: 'a'));
-      ref.tell(LocalMessage(payload: 'b'));
+      ref.tell('a');
+      ref.tell('b');
       await settle();
       expect(await system.sys.getState(ref), 2);
     });
@@ -87,8 +87,8 @@ void main() {
     test('jumps the queue but not the handler in flight', () async {
       final gate = Completer<void>();
       final ref = await system.spawn('plain', () => Plain(gate));
-      ref.tell(LocalMessage(payload: 'wait'));
-      ref.tell(LocalMessage(payload: 'later'));
+      ref.tell('wait');
+      ref.tell('later');
       await settle();
       final pending = system.sys.getState(ref);
       gate.complete();
@@ -103,7 +103,7 @@ void main() {
       system = LocalActorSystem(
           ActorSystemConfig(stopTimeout: const Duration(milliseconds: 20)));
       final ref = await system.spawn('plain', () => Plain(gate));
-      ref.tell(LocalMessage(payload: 'wait'));
+      ref.tell('wait');
       await settle();
       await expectLater(
           system.sys.getState(ref, timeout: const Duration(milliseconds: 20)),
@@ -117,7 +117,7 @@ void main() {
     test('replaces a behaviour state', () async {
       final ref = await system.spawn('tally', () => Tally());
       expect(await system.sys.replaceState(ref, (s) => (s as int) + 40), 40);
-      ref.tell(LocalMessage(payload: 'a'));
+      ref.tell('a');
       await settle();
       expect(await system.sys.getState(ref), 41);
     });
@@ -137,8 +137,8 @@ void main() {
   test('suspend holds user messages and still answers sys requests', () async {
     final ref = await system.spawn('tally', () => Tally());
     system.sys.suspend(ref);
-    ref.tell(LocalMessage(payload: 'a'));
-    ref.tell(LocalMessage(payload: 'b'));
+    ref.tell('a');
+    ref.tell('b');
     await settle();
     expect(await system.sys.getState(ref), 0);
     final stats = system.sys.statistics(ref);
@@ -154,9 +154,9 @@ void main() {
     final ref = await system.spawn('plain', () => Plain(),
         supervision:
             OneForOneStrategy(decider: (_, __) => SupervisionDecision.restart));
-    ref.tell(LocalMessage(payload: 'a'));
-    ref.tell(LocalMessage(payload: 'boom'));
-    ref.tell(LocalMessage(payload: 'b'));
+    ref.tell('a');
+    ref.tell('boom');
+    ref.tell('b');
     await settle(30);
     final stats = system.sys.statistics(ref);
     expect(stats.messagesProcessed, 3);
@@ -167,10 +167,10 @@ void main() {
   test('trace logs received messages until switched off', () async {
     final ref = await system.spawn('plain', () => Plain());
     system.sys.trace(ref, true);
-    ref.tell(LocalMessage(payload: 'one'));
+    ref.tell('one');
     await settle();
     system.sys.trace(ref, false);
-    ref.tell(LocalMessage(payload: 'two'));
+    ref.tell('two');
     await settle();
     final traced =
         logs.records.where((r) => r.message.startsWith('received')).toList();
@@ -181,11 +181,11 @@ void main() {
   group('upgrade', () {
     test('hands the state to codeChange and keeps ref and mailbox', () async {
       final ref = await system.spawn('tally', () => Tally());
-      ref.tell(LocalMessage(payload: 'a'));
-      ref.tell(LocalMessage(payload: 'b'));
+      ref.tell('a');
+      ref.tell('b');
       await settle();
       system.sys.suspend(ref);
-      ref.tell(LocalMessage(payload: 'queued'));
+      ref.tell('queued');
       await system.sys.upgrade(ref, () => TallyV2());
       system.sys.resume(ref);
       await settle();

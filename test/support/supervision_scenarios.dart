@@ -68,7 +68,7 @@ class _Watcher extends Actor {
     switch (message) {
       case ActorRef target:
         context.watch(target);
-        context.sender?.tell(LocalMessage(payload: 'watching'));
+        context.sender?.tell('watching');
       case Terminated(:final actor, :final reason):
         final why = switch (reason) {
           ErrorExit(error: RestartLimitExceeded()) => 'restart limit',
@@ -93,8 +93,7 @@ SupervisionDecision _alwaysEscalate(Object e, StackTrace s) =>
 Future<void> _settle([int ms = 40]) =>
     Future<void>.delayed(Duration(milliseconds: ms));
 
-void _tell(ActorRef ref, Object payload) =>
-    ref.tell(LocalMessage(payload: payload));
+void _tell(ActorRef ref, Object payload) => ref.tell(payload);
 
 int _count(String entry) => _log.where((l) => l == entry).length;
 
@@ -121,8 +120,7 @@ class SupervisionScenarios {
 
   /// Completes once the watcher is watching [target]. Telling it and moving
   /// on would race with whatever the test does to [target] next.
-  Future<void> watch(ActorRef target) =>
-      watcher.ask<String>(LocalMessage(payload: target));
+  Future<void> watch(ActorRef target) => watcher.ask<String>(target);
 
   ActorRef kid(String name) => system.getActor('sup/$name')!;
 

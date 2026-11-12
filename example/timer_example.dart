@@ -169,10 +169,10 @@ void main() async {
 
   // Simulate user activity
   await Future.delayed(Duration(seconds: 3));
-  sessionActor.tell(LocalMessage(payload: 'activity'));
+  sessionActor.tell('activity');
 
   await Future.delayed(Duration(seconds: 5));
-  sessionActor.tell(LocalMessage(payload: 'activity'));
+  sessionActor.tell('activity');
 
   // Let it timeout naturally after this
   await Future.delayed(Duration(seconds: 12));

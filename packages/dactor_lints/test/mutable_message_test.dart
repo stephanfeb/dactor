@@ -17,18 +17,6 @@ class MutableMessageTest extends DactorRuleTest {
     super.setUp();
   }
 
-  Future<void> test_messageClass_nonFinalField() async {
-    await expectReported('''
-import 'package:dactor/dactor.dart';
-
-class Deposit implements Message {
-  final String account;
-  int [!amountCents!];
-  Deposit(this.account, this.amountCents);
-}
-''');
-  }
-
   Future<void> test_messageClass_extendsLocalMessage() async {
     await expectReported('''
 import 'package:dactor/dactor.dart';
@@ -43,7 +31,7 @@ class Reply extends LocalMessage {
     await assertNoDiagnostics('''
 import 'package:dactor/dactor.dart';
 
-class Deposit implements Message {
+class Deposit extends LocalMessage {
   static int created = 0;
   final String account;
   final int amountCents;
@@ -63,7 +51,7 @@ class Cart {
 }
 
 void send(ActorRef ref, Cart cart) {
-  ref.tell(LocalMessage(payload: [!cart!]));
+  ref.tell([!cart!]);
 }
 ''');
   }
@@ -82,7 +70,7 @@ class Derived extends Base {
 }
 
 void send(ActorRef ref) {
-  ref.tell(LocalMessage(payload: [!Derived('x')!]));
+  ref.tell([!Derived('x')!]);
 }
 ''');
   }
@@ -99,11 +87,45 @@ class Point {
 enum Colour { red, green }
 
 void send(ActorRef ref) {
-  ref.tell(LocalMessage(payload: const Point(1, 2)));
-  ref.tell(LocalMessage(payload: Colour.red));
-  ref.tell(LocalMessage(payload: 'text'));
-  ref.tell(LocalMessage(payload: 42));
-  ref.tell(LocalMessage(payload: (1, 'record')));
+  ref.tell(const Point(1, 2));
+  ref.tell(Colour.red);
+  ref.tell('text');
+  ref.tell(42);
+  ref.tell((1, 'record'));
+}
+''');
+  }
+
+  Future<void> test_payload_legacyLocalMessage() async {
+    await expectReported('''
+import 'package:dactor/dactor.dart';
+
+class Cart {
+  int items = 0;
+}
+
+void send(ActorRef ref, Cart cart) {
+  ref.tell(LocalMessage(payload: [!cart!]));
+}
+''');
+  }
+
+  Future<void> test_askTypedTellAndCall() async {
+    await expectReported('''
+import 'package:dactor/dactor.dart';
+
+class Cart {
+  int items = 0;
+}
+
+final class Checkout with Call<int> {
+  int attempts = 0;
+}
+
+void send(ActorRef ref, TypedRef<Object> typed, Cart cart) {
+  ref.ask<int>([!cart!]);
+  typed.tell([!cart!]);
+  typed.call([!Checkout()!]);
 }
 ''');
   }
@@ -113,7 +135,7 @@ void send(ActorRef ref) {
 import 'package:dactor/dactor.dart';
 
 void send(ActorRef ref, ActorRef other) {
-  ref.tell(LocalMessage(payload: other));
+  ref.tell(other);
 }
 ''');
   }

@@ -5,6 +5,7 @@ import 'package:meta/meta.dart';
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/actor_system.dart';
 import 'package:dactor/src/exit_reason.dart';
+import 'package:dactor/src/sending.dart';
 import 'package:dactor/src/timer_scheduler.dart';
 
 /// The context of an actor, providing information about its environment and
@@ -16,8 +17,15 @@ abstract class ActorContext {
   /// A reference to the actor system.
   ActorSystem get system;
 
-  /// The sender of the current message.
+  /// The sender of the current message: the actor whose code told it, or
+  /// null if it came from outside any actor or from the runtime.
   ActorRef? get sender;
+
+  /// Tells [target] [message] with the current message's [sender] as its
+  /// sender, so that [target] answers whoever asked. For routers and other
+  /// actors that pass work on.
+  void forward(ActorRef target, Object? message) =>
+      Sending.as(sender, () => target.tell(message));
 
   /// The timer scheduler for this actor.
   ///

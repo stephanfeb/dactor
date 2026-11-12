@@ -14,29 +14,29 @@ class Summer extends Actor {
     if (message is int) {
       total += message;
     } else {
-      context.sender?.tell(LocalMessage(payload: total));
+      context.sender?.tell(total);
     }
   }
 }
 
 Future<void> measure(String name, ActorRef ref) async {
   for (var i = 0; i < 20000; i++) {
-    ref.tell(LocalMessage(payload: 1));
+    ref.tell(1);
   }
-  await ref.ask<int>(LocalMessage(payload: 'read'), const Duration(minutes: 1));
+  await ref.ask<int>('read', const Duration(minutes: 1));
 
   const n = 200000;
   var watch = Stopwatch()..start();
   for (var i = 0; i < n; i++) {
-    ref.tell(LocalMessage(payload: 1));
+    ref.tell(1);
   }
-  await ref.ask<int>(LocalMessage(payload: 'read'), const Duration(minutes: 1));
+  await ref.ask<int>('read', const Duration(minutes: 1));
   final oneWay = n / watch.elapsedMicroseconds * 1e6;
 
   const asks = 10000;
   watch = Stopwatch()..start();
   for (var i = 0; i < asks; i++) {
-    await ref.ask<int>(LocalMessage(payload: 'read'));
+    await ref.ask<int>('read');
   }
   print('${name.padRight(8)} '
       '${(oneWay / 1000).toStringAsFixed(0).padLeft(5)} k msg/s one way, '

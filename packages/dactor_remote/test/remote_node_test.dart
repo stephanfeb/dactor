@@ -42,8 +42,7 @@ void main() {
   Future<ActorRef> introduce(
       TestNode from, ActorRef to, TestNode other, String name) async {
     final remote = await from.remote.lookup(other.id, name);
-    expect(await to.ask<String>(LocalMessage(payload: Introduce(name, remote))),
-        'met $name');
+    expect(await to.ask<String>(Introduce(name, remote)), 'met $name');
     return remote;
   }
 
@@ -54,8 +53,7 @@ void main() {
       expect(bob, isA<RemoteRef>());
       expect(bob.id, 'dactor://b/bob');
       tell(bob, 'hello');
-      expect(await bob.ask<String>(LocalMessage(payload: 'ping')),
-          'pong from bob');
+      expect(await bob.ask<String>('ping'), 'pong from bob');
       expect(log, contains('bob got hello'));
     });
 
@@ -83,8 +81,7 @@ void main() {
       final alice = await agent(a, 'alice');
       await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
-      expect(await alice.ask<String>(LocalMessage(payload: ('ask', 'bob'))),
-          'relayed: pong from bob');
+      expect(await alice.ask<String>(('ask', 'bob')), 'relayed: pong from bob');
     });
 
     test('a reference inside a message works where it lands', () async {
@@ -93,9 +90,7 @@ void main() {
       final bob = await agent(b, 'bob');
       final remoteBob = await a.remote.lookup('b', 'bob');
       expect(
-          await remoteBob
-              .ask<String>(LocalMessage(payload: Introduce('alice', alice))),
-          'met alice');
+          await remoteBob.ask<String>(Introduce('alice', alice)), 'met alice');
       tell(bob, ('ping', 'alice'));
       await settle();
       expect(log, contains('bob got pong from alice'));
@@ -107,7 +102,7 @@ void main() {
       final bob = await a.remote.lookup('b', 'bob');
       // b learns of alice, then a third party on a asks b to ping her: the
       // reply path a -> b -> a ends at the local actor.
-      await bob.ask<String>(LocalMessage(payload: Introduce('alice', alice)));
+      await bob.ask<String>(Introduce('alice', alice));
       final carol = await agent(a, 'carol');
       await introduce(a, carol, b, 'bob');
       tell(carol, ('forward', 'bob', ('ping', 'alice')));
@@ -121,9 +116,7 @@ void main() {
       await introduce(a, alice, b, 'bob');
       // alice forwards the ask to bob; bob's reply goes straight back.
       expect(
-          await alice
-              .ask<String>(LocalMessage(payload: ('forward', 'bob', 'ping'))),
-          'pong from bob');
+          await alice.ask<String>(('forward', 'bob', 'ping')), 'pong from bob');
     });
 
     test('typed calls work, and a failing handler fails the call', () async {
@@ -144,22 +137,20 @@ void main() {
       final bob = await agent(b, 'bob');
       final remote = await a.remote.lookup('b', 'bob');
       await b.system.stop(bob);
-      await expectLater(
-          remote.ask<String>(LocalMessage(payload: 'ping')), throwsStateError);
+      await expectLater(remote.ask<String>('ping'), throwsStateError);
 
       await agent(b, 'quiet');
       final quiet = await a.remote.lookup('b', 'quiet');
       await expectLater(
-          quiet.ask<String>(LocalMessage(payload: 'no answer to this'),
-              const Duration(milliseconds: 50)),
+          quiet.ask<String>(
+              'no answer to this', const Duration(milliseconds: 50)),
           throwsA(isA<TimeoutException>()));
     });
 
     test('a reply of the wrong type fails the ask', () async {
       await agent(b, 'bob');
       final bob = await a.remote.lookup('b', 'bob');
-      await expectLater(
-          bob.ask<int>(LocalMessage(payload: 'ping')), throwsStateError);
+      await expectLater(bob.ask<int>('ping'), throwsStateError);
     });
 
     test('a message without a codec is refused where it is sent', () async {
@@ -167,7 +158,7 @@ void main() {
       final bob = await a.remote.lookup('b', 'bob');
       expect(() => tell(bob, DateTime(2026)),
           throwsA(isA<UnregisteredMessageType>()));
-      expect(() => bob.ask<String>(LocalMessage(payload: Object())),
+      expect(() => bob.ask<String>(Object()),
           throwsA(isA<UnregisteredMessageType>()));
     });
 
@@ -183,7 +174,7 @@ void main() {
       final alice = await agent(a, 'alice');
       final bob = await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(('watch', 'bob'));
       await settle();
       await b.system.stop(bob);
       await settle();
@@ -194,7 +185,7 @@ void main() {
       final alice = await agent(a, 'alice');
       final bob = await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(('watch', 'bob'));
       await settle();
       tell(bob, 'boom');
       await settle();
@@ -209,7 +200,7 @@ void main() {
       final bob = await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
       await b.system.stop(bob);
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(('watch', 'bob'));
       await settle();
       expect(log, contains('alice saw dactor://b/bob terminated: noproc'));
     });
@@ -218,7 +209,7 @@ void main() {
       final alice = await agent(a, 'alice');
       await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(('watch', 'bob'));
       await settle();
       network.partition('a', 'b');
       await settle(80);
@@ -234,7 +225,7 @@ void main() {
           supervision: const OneForOneStrategy(decider: restart));
       final bob = await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       tell(bob, 'boom');
       await settle();
@@ -247,7 +238,7 @@ void main() {
       final alice = await agent(a, 'alice');
       await agent(b, 'bob', trap: true);
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       tell(alice, 'boom');
       await settle();
@@ -261,7 +252,7 @@ void main() {
       final alice = await agent(a, 'alice');
       final bob = await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       await b.system.stop(bob);
       await settle();
@@ -272,7 +263,7 @@ void main() {
       final alice = await agent(a, 'alice', trap: true);
       final bob = await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       b.system.kill(bob);
       await settle();
@@ -283,9 +274,9 @@ void main() {
       final alice = await agent(a, 'alice', trap: true);
       final bob = await agent(b, 'bob', trap: true);
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
-      await alice.ask<String>(LocalMessage(payload: ('unlink', 'bob')));
+      await alice.ask<String>(('unlink', 'bob'));
       await settle();
       b.system.kill(bob);
       await settle();
@@ -297,7 +288,7 @@ void main() {
       final bob = await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
       await b.system.stop(bob);
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       expect(log, contains('alice got exit from dactor://b/bob: noproc'));
     });
@@ -306,7 +297,7 @@ void main() {
       final alice = await agent(a, 'alice', trap: true);
       await agent(b, 'bob', trap: true);
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+      await alice.ask<String>(('link', 'bob'));
       await settle();
       network.partition('a', 'b');
       await settle(80);
@@ -331,8 +322,8 @@ void main() {
     test('a pending ask fails when the connection is lost', () async {
       await agent(b, 'quiet');
       final quiet = await a.remote.lookup('b', 'quiet');
-      final pending = quiet.ask<String>(
-          LocalMessage(payload: 'never answered'), const Duration(seconds: 30));
+      final pending =
+          quiet.ask<String>('never answered', const Duration(seconds: 30));
       network.partition('a', 'b');
       await expectLater(pending, throwsA(isA<NodeUnreachable>()));
     });
@@ -342,18 +333,17 @@ void main() {
       final bob = await a.remote.lookup('b', 'bob');
       network.partition('a', 'b');
       await settle(80);
-      await expectLater(bob.ask<String>(LocalMessage(payload: 'ping')),
-          throwsA(isA<NodeUnreachable>()));
+      await expectLater(
+          bob.ask<String>('ping'), throwsA(isA<NodeUnreachable>()));
       network.heal('a', 'b');
-      expect(await bob.ask<String>(LocalMessage(payload: 'ping')),
-          'pong from bob');
+      expect(await bob.ask<String>('ping'), 'pong from bob');
     });
 
     test('closing a node tells the other side', () async {
       final alice = await agent(a, 'alice');
       await agent(b, 'bob');
       await introduce(a, alice, b, 'bob');
-      await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+      await alice.ask<String>(('watch', 'bob'));
       await settle();
       await b.remote.close();
       await settle();
@@ -390,8 +380,7 @@ void main() {
       expect(uri, startsWith('dactor://b/bob?cap='));
       final again = a.remote.resolve(uri);
       expect(again, bob);
-      expect(await again.ask<String>(LocalMessage(payload: 'ping')),
-          'pong from bob');
+      expect(await again.ask<String>('ping'), 'pong from bob');
     });
 
     test('ids with slashes and odd node names survive too', () async {
@@ -402,8 +391,7 @@ void main() {
       final resolved = a.remote.resolve(uri) as RemoteRef;
       expect(resolved.node, 'host:4001');
       expect(resolved.path, 'sup/kid 1');
-      expect(await resolved.ask<String>(LocalMessage(payload: 'ping')),
-          'pong from kid');
+      expect(await resolved.ask<String>('ping'), 'pong from kid');
       expect(() => a.remote.resolve('http://b/bob'), throwsFormatException);
       expect(() => a.remote.resolve('dactor://b'), throwsFormatException);
     });

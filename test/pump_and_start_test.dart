@@ -21,7 +21,7 @@ class _PingPong extends Actor {
       if (!done.isCompleted) done.complete();
       return;
     }
-    peer!.tell(LocalMessage(payload: 'ball'));
+    peer!.tell('ball');
   }
 }
 
@@ -95,8 +95,8 @@ void main() {
       final done = Completer<void>();
       final a = await system.spawn('a', () => _PingPong(150000, done));
       final b = await system.spawn('b', () => _PingPong(150000, done));
-      a.tell(LocalMessage(payload: b));
-      b.tell(LocalMessage(payload: a));
+      a.tell(b);
+      b.tell(a);
 
       final sw = Stopwatch()..start();
       int? firedAt;
@@ -107,7 +107,7 @@ void main() {
       final periodic =
           Timer.periodic(const Duration(milliseconds: 5), (_) => ticks++);
 
-      a.tell(LocalMessage(payload: 'ball'));
+      a.tell('ball');
       await done.future;
       final drained = sw.elapsedMilliseconds;
       periodic.cancel();
@@ -122,7 +122,7 @@ void main() {
 
     test('a handler that blocks is counted', () async {
       final spinner = await system.spawn('spinner', () => _Spinner());
-      spinner.tell(LocalMessage(payload: 'go'));
+      spinner.tell('go');
       await _settle();
       expect(metrics.getCounter('actors.blocking_handler'), 1);
     });
@@ -142,7 +142,7 @@ void main() {
     test('a ref obtained during the failed start is dead afterwards', () async {
       final pending = system.spawn('y', () => _FailsToStart());
       final early = system.getActor('y')!;
-      early.tell(LocalMessage(payload: 'early'));
+      early.tell('early');
       await expectLater(pending, throwsStateError);
       expect(early.isAlive, isFalse);
       await _settle();

@@ -23,7 +23,7 @@ class Watcher extends Actor {
       case Terminated(:final actor, :final reason):
         seen.add('${actor.id} $reason');
     }
-    context.sender?.tell(LocalMessage(payload: 'done'));
+    context.sender?.tell('done');
   }
 }
 
@@ -38,8 +38,8 @@ class UnwatchingRef implements ActorRef {
   @override
   bool get isAlive => true;
   @override
-  void tell(Message message, {ActorRef? sender}) {
-    final payload = message is LocalMessage ? message.payload : message;
+  void tell(Object? message) {
+    final payload = message;
     if (payload is Terminated) {
       seen.add(payload.actor.id);
       payload.actor.unwatch(this);
@@ -47,7 +47,7 @@ class UnwatchingRef implements ActorRef {
   }
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) =>
+  Future<T> ask<T>(Object? message, [Duration? timeout]) =>
       throw UnsupportedError('not an actor');
   @override
   void watch(ActorRef watcher) {}
@@ -73,8 +73,8 @@ void main() {
     final seen = <String>[];
     final watcher = await system.spawn('watcher', () => Watcher(seen));
     final target = await system.spawn('target', () => Idle());
-    await watcher.ask(LocalMessage(payload: ('watch', target)));
-    await watcher.ask(LocalMessage(payload: ('unwatch', target)));
+    await watcher.ask(('watch', target));
+    await watcher.ask(('unwatch', target));
     await system.stop(target);
     await settle();
     expect(seen, isEmpty);
@@ -85,9 +85,9 @@ void main() {
     final a = await system.spawn('a', () => Watcher(seenA));
     final b = await system.spawn('b', () => Watcher(seenB));
     final target = await system.spawn('target', () => Idle());
-    await a.ask(LocalMessage(payload: ('watch', target)));
-    await b.ask(LocalMessage(payload: ('watch', target)));
-    await a.ask(LocalMessage(payload: ('unwatch', target)));
+    await a.ask(('watch', target));
+    await b.ask(('watch', target));
+    await a.ask(('unwatch', target));
     await system.stop(target);
     await settle();
     expect(seenA, isEmpty);
@@ -98,11 +98,10 @@ void main() {
     final seen = <String>[];
     final watcher = await system.spawn('watcher', () => Watcher(seen));
     final target = await system.spawn('target', () => Idle());
-    await watcher.ask(LocalMessage(payload: ('watch', target)));
+    await watcher.ask(('watch', target));
 
     final release = Completer<void>();
-    final unwatched = watcher
-        .ask(LocalMessage(payload: ('unwatch after', target, release.future)));
+    final unwatched = watcher.ask(('unwatch after', target, release.future));
     // The watcher is busy; the Terminated waits in its mailbox.
     await system.stop(target);
     await settle();
@@ -117,13 +116,13 @@ void main() {
     final seen = <String>[];
     final watcher = await system.spawn('watcher', () => Watcher(seen));
     final target = await system.spawn('target', () => Idle());
-    await watcher.ask(LocalMessage(payload: ('watch', target)));
+    await watcher.ask(('watch', target));
     final release = Completer<void>();
-    final busy = watcher.ask(LocalMessage(payload: (
+    final busy = watcher.ask((
       'unwatch after',
       await system.spawn('other', () => Idle()),
       release.future
-    )));
+    ));
     await system.stop(target);
     await settle();
     target.unwatch(watcher); // too late: it is already queued
@@ -140,8 +139,7 @@ void main() {
     await system.stop(target);
     final release = Completer<void>();
     // Watch (noproc is queued at once), then unwatch before it is handled.
-    final busy = watcher
-        .ask(LocalMessage(payload: ('unwatch after', target, release.future)));
+    final busy = watcher.ask(('unwatch after', target, release.future));
     target.watch(watcher);
     release.complete();
     await busy;

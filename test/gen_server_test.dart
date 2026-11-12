@@ -81,6 +81,57 @@ class FailingInit extends GenServer<int, Object> {
   void terminate(int state) => _log.add('terminate called');
 }
 
+sealed class Job {}
+
+final class Work extends Job {
+  final String name;
+  final List<String> then;
+  Work(this.name, [this.then = const []]);
+}
+
+final class Ask extends Job with Call<List<String>> {
+  final List<String> then;
+  Ask([this.then = const []]);
+}
+
+/// Logs every step to [_log]; the state is the list of steps so far.
+class Continuing extends GenServer<List<String>, Job> {
+  final List<String> atInit;
+  final Completer<void>? gate;
+  Continuing({this.atInit = const [], this.gate});
+
+  @override
+  List<String> init() {
+    atInit.forEach(continueWith);
+    return ['init'];
+  }
+
+  @override
+  List<String> handleCast(Job message, List<String> state) {
+    final work = message as Work;
+    work.then.forEach(continueWith);
+    _log.add(work.name);
+    return [...state, work.name];
+  }
+
+  @override
+  CallResult<List<String>> handleCall(
+      Job request, List<String> state, From from) {
+    final ask = request as Ask;
+    ask.then.forEach(continueWith);
+    return ask.reply(state, state);
+  }
+
+  @override
+  Future<List<String>> handleContinue(Object? arg, List<String> state) async {
+    if (arg == 'wait') await gate!.future;
+    if (arg == 'fail') throw StateError('continue failed');
+    if (arg == 'chain') continueWith('chained');
+    _log.add('continue $arg');
+    return [...state, 'continue $arg'];
+  }
+}
+
 void main() {
   late LocalActorSystem system;
 
@@ -144,7 +195,7 @@ void main() {
 
   test('messages of other types go to handleInfo', () async {
     final ref = await counter();
-    ref.untyped.tell(LocalMessage(payload: 'hello'));
+    ref.untyped.tell('hello');
     expect(await ref.call(Get()), 0);
     expect(_log, ['info: hello']);
   });
@@ -165,6 +216,59 @@ void main() {
         (await system.spawn('counter', () => Counter())).typed<Increment>();
     // Get is a Call<int> but not an Increment.
     await expectLater(ref.call(Get()), throwsArgumentError);
+  });
+
+  group('handleContinue', () {
+    test('a cast\'s continues run in order before the next message', () async {
+      final ref = (await system.spawn('c', () => Continuing())).typed<Job>();
+      ref.tell(Work('a', ['1', 'chain', '2']));
+      ref.tell(Work('b'));
+      expect(await ref.call(Ask()), [
+        'init',
+        'a',
+        'continue 1',
+        'continue chain',
+        'continue 2',
+        'continue chained',
+        'b'
+      ]);
+    });
+
+    test('a call is answered before its continue runs', () async {
+      final gate = Completer<void>();
+      final ref =
+          (await system.spawn('c', () => Continuing(gate: gate))).typed<Job>();
+      // The reply arrives while the continue is still waiting on the gate.
+      expect(await ref.call(Ask(['wait'])), ['init']);
+      expect(_log, isEmpty);
+      gate.complete();
+      expect(await ref.call(Ask()), ['init', 'continue wait']);
+    });
+
+    test('init\'s continue does not hold up spawn, and runs first', () async {
+      final gate = Completer<void>();
+      final ref = (await system.spawn(
+              'c', () => Continuing(atInit: ['wait', 'x'], gate: gate)))
+          .typed<Job>();
+      // spawn returned while the continue waits.
+      ref.tell(Work('a'));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(_log, isEmpty);
+      gate.complete();
+      expect(
+          await ref.call(Ask()), ['init', 'continue wait', 'continue x', 'a']);
+    });
+
+    test('a throwing continue fails the server', () async {
+      final ref = (await system.spawn('c', () => Continuing(),
+              supervision: OneForOneStrategy(
+                  decider: (_, __) => SupervisionDecision.restart)))
+          .typed<Job>();
+      ref.tell(Work('a', ['fail']));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      // Restarted: init ran again and the work is gone.
+      expect(await ref.call(Ask()), ['init']);
+    });
   });
 
   test('call times out when nobody answers', () async {

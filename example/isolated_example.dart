@@ -15,7 +15,7 @@ class PrimeChecker extends Actor {
     for (var d = 2; d * d <= message; d++) {
       if (message % d == 0) prime = false;
     }
-    context.sender?.tell(LocalMessage(payload: prime));
+    context.sender?.tell(prime);
   }
 }
 
@@ -29,7 +29,7 @@ class Clock extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (message == 'tick') ticks++;
-    if (message == 'read') context.sender?.tell(LocalMessage(payload: ticks));
+    if (message == 'read') context.sender?.tell(ticks);
   }
 }
 
@@ -53,17 +53,17 @@ void main() async {
       supervision: const OneForOneStrategy(decider: restart));
 
   print('1000003 prime? '
-      '${await checker.ask<bool>(LocalMessage(payload: 1000003))}');
+      '${await checker.ask<bool>(1000003)}');
 
   // Send it into the infinite loop.
-  checker.tell(LocalMessage(payload: -1));
+  checker.tell(-1);
   await Future<void>.delayed(const Duration(seconds: 1));
 
   // The clock never stopped ticking, and the checker is back.
   print('Clock ticks meanwhile: '
-      '${await clock.ask<int>(LocalMessage(payload: 'read'))}');
+      '${await clock.ask<int>('read')}');
   print('1000033 prime? '
-      '${await checker.ask<bool>(LocalMessage(payload: 1000033))}');
+      '${await checker.ask<bool>(1000033)}');
 
   await system.shutdown();
 }

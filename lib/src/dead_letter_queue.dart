@@ -1,16 +1,16 @@
 import 'dart:collection';
 
-import 'package:dactor/src/message.dart';
+import 'package:dactor/src/system_messages.dart';
 import 'package:dactor/src/metrics/metrics.dart';
 
 class DeadLetterQueue {
-  final _queue = Queue<Message>();
+  final _queue = Queue<DeadLetter>();
   final MetricsCollector _metrics;
   final int maxSize;
 
   DeadLetterQueue(this._metrics, {this.maxSize = 1000});
 
-  void enqueue(Message message) {
+  void enqueue(DeadLetter message) {
     if (_queue.length >= maxSize) {
       _queue.removeFirst();
       _metrics.increment('dead_letters.evicted');
@@ -19,7 +19,7 @@ class DeadLetterQueue {
     _metrics.increment('dead_letters');
   }
 
-  Message? dequeue() {
+  DeadLetter? dequeue() {
     if (_queue.isNotEmpty) {
       return _queue.removeFirst();
     }

@@ -40,7 +40,9 @@ InterfaceElement? enclosingActor(AstNode node) {
 }
 
 /// If [node] sends something to another actor, the expressions being sent:
-/// the `payload:` of a `LocalMessage`, or the event given to `publish`.
+/// the message given to `tell`, `ask`, `forward` or a `TypedRef`'s `call`,
+/// the event given to `publish`, or the `payload:` of a deprecated
+/// `LocalMessage`.
 Iterable<Expression> sentExpressions(AstNode node) sync* {
   if (node is InstanceCreationExpression) {
     final type = node.staticType;
@@ -51,6 +53,18 @@ Iterable<Expression> sentExpressions(AstNode node) sync* {
           yield argument.argumentExpression;
         }
       }
+    }
+  } else if (node is MethodInvocation &&
+      _sendsTo.containsKey(node.methodName.name)) {
+    final owner = node.methodName.element?.enclosingElement;
+    final arguments = node.argumentList.arguments;
+    final at = _sendsTo[node.methodName.name]!;
+    if (owner is InterfaceElement &&
+        arguments.length > at &&
+        _owners[node.methodName.name]!.any(
+          (name) => isDactorSubtype(owner, name),
+        )) {
+      yield arguments[at].argumentExpression;
     }
   } else if (node is MethodInvocation && node.methodName.name == 'publish') {
     final owner = node.methodName.element?.enclosingElement;
@@ -64,3 +78,14 @@ Iterable<Expression> sentExpressions(AstNode node) sync* {
     }
   }
 }
+
+/// The methods that send, and which argument is the message.
+const _sendsTo = {'tell': 0, 'ask': 0, 'call': 0, 'forward': 1};
+
+/// The dactor types each of those methods sends from.
+const _owners = {
+  'tell': ['ActorRef', 'TypedRef'],
+  'ask': ['ActorRef'],
+  'call': ['TypedRef'],
+  'forward': ['ActorContext'],
+};

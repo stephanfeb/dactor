@@ -134,8 +134,8 @@ void main() {
         .expose('bob', await b.system.spawn('bob', () => Agent('bob', log)));
     final alice = await a.system.spawn('alice', () => Agent('alice', log));
     final bob = await a.remote.lookup('b', 'bob');
-    await alice.ask<String>(LocalMessage(payload: Introduce('bob', bob)));
-    await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+    await alice.ask<String>(Introduce('bob', bob));
+    await alice.ask<String>(('watch', 'bob'));
     await settle();
 
     // Mallory claims bob is dead. Alice watches bob on b, not on mallory.
@@ -158,7 +158,7 @@ void main() {
     // Connect mallory, then race her forged replies against the real one.
     mallory.send('a', {kind: 99});
     await settle();
-    final asked = bob.ask<String>(LocalMessage(payload: 'ping'));
+    final asked = bob.ask<String>('ping');
     for (var guess = 0; guess < 20; guess++) {
       mallory.send('a', {
         kind: reply,
@@ -197,8 +197,7 @@ void main() {
     final b = join(network, 'b');
     addTearDown(b.close);
     final ref = await b.remote.lookup('a', 'open');
-    expect(
-        await ref.ask<String>(LocalMessage(payload: 'ping')), 'pong from open');
+    expect(await ref.ask<String>('ping'), 'pong from open');
   });
 
   test('tokens die with the secret, and live on with it', () async {
@@ -220,10 +219,7 @@ void main() {
     final (second, _) = await start('stable', secret);
     addTearDown(second.close);
     expect(
-        await a.remote
-            .resolve(address)
-            .ask<String>(LocalMessage(payload: 'ping')),
-        'pong from svc');
+        await a.remote.resolve(address).ask<String>('ping'), 'pong from svc');
 
     // A new secret: the old address is refused.
     final (third, old) = await start('fresh', null);
@@ -231,8 +227,7 @@ void main() {
     final (fourth, _) = await start('fresh', null);
     addTearDown(fourth.close);
     await expectLater(
-        a.remote.resolve(old).ask<String>(LocalMessage(payload: 'ping')),
-        throwsStateError);
+        a.remote.resolve(old).ask<String>('ping'), throwsStateError);
   });
 
   test('with capabilities off, an id is enough', () async {

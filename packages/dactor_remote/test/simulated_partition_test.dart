@@ -30,9 +30,9 @@ Future<List<String>> partitionAndRecover(Simulation sim) async {
 
   final remoteBob = await a.remote.lookup('b', 'bob');
   final remoteSink = await a.remote.lookup('b', 'sink');
-  await alice.ask<String>(LocalMessage(payload: Introduce('bob', remoteBob)));
-  await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
-  await alice.ask<String>(LocalMessage(payload: ('link', 'bob')));
+  await alice.ask<String>(Introduce('bob', remoteBob));
+  await alice.ask<String>(('watch', 'bob'));
+  await alice.ask<String>(('link', 'bob'));
   await sim.wait(const Duration(milliseconds: 100));
 
   // A stream of numbered messages, with the partition at a random point.
@@ -42,7 +42,7 @@ Future<List<String>> partitionAndRecover(Simulation sim) async {
     if (i == cutAt) {
       // An ask in flight when the path is cut.
       caught = remoteBob
-          .ask<String>(LocalMessage(payload: 'ping'), const Duration(hours: 1))
+          .ask<String>('ping', const Duration(hours: 1))
           .then((v) => 'answered', onError: (Object e) => '${e.runtimeType}');
       network.partition('a', 'b');
     }
@@ -73,11 +73,10 @@ Future<List<String>> partitionAndRecover(Simulation sim) async {
 
   // Recovery: the same references work again, and so do new watches.
   network.heal('a', 'b');
-  expect(await remoteBob.ask<String>(LocalMessage(payload: 'ping')),
-      'pong from bob');
+  expect(await remoteBob.ask<String>('ping'), 'pong from bob');
   expect(a.remote.isConnected('b'), isTrue);
   tell(remoteSink, 1000);
-  await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+  await alice.ask<String>(('watch', 'bob'));
   await sim.wait(const Duration(milliseconds: 100));
   await b.system.stop(bob);
   await sim.wait(const Duration(milliseconds: 100));
@@ -132,9 +131,8 @@ void main() {
         for (final (j, other) in nodes.indexed) {
           if (i == j) continue;
           final remote = await node.remote.lookup(other.id, 'agent');
-          await agents[i]
-              .ask<String>(LocalMessage(payload: Introduce('n$j', remote)));
-          await agents[i].ask<String>(LocalMessage(payload: ('watch', 'n$j')));
+          await agents[i].ask<String>(Introduce('n$j', remote));
+          await agents[i].ask<String>(('watch', 'n$j'));
         }
       }
       await sim.wait(const Duration(milliseconds: 50));
@@ -150,8 +148,7 @@ void main() {
       });
       // The two that can still talk, still do.
       final n1 = await nodes[0].remote.lookup('n1', 'agent');
-      expect(await n1.ask<String>(LocalMessage(payload: 'ping')),
-          'pong from agent1');
+      expect(await n1.ask<String>('ping'), 'pong from agent1');
       for (final node in nodes) {
         await node.remote.close();
       }

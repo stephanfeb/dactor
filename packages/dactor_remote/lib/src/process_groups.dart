@@ -327,15 +327,15 @@ class _Watcher implements ActorRef {
   bool get isAlive => !_groups._closed;
 
   @override
-  void tell(Message message, {ActorRef? sender}) {
-    final payload = message is LocalMessage ? message.payload : message;
+  void tell(Object? message) {
+    final payload = message;
     if (payload is Terminated && !_groups._closed) {
       _groups._ended(payload.actor);
     }
   }
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) =>
+  Future<T> ask<T>(Object? message, [Duration? timeout]) =>
       throw UnsupportedError('Not an actor');
 
   @override

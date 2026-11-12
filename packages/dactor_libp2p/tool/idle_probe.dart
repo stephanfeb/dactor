@@ -52,14 +52,11 @@ Future<void> main(List<String> args) async {
   final (b, sysB) = await node('b');
   final bFromA = a.resolve(b.uriOf(sysB.getActor('echo')!));
   final aFromB = b.resolve(a.uriOf(sysA.getActor('echo')!));
-  print(
-      '${t()} ask a->b: ${await bFromA.ask<Object?>(LocalMessage(payload: 1))}');
-  print(
-      '${t()} ask b->a: ${await aFromB.ask<Object?>(LocalMessage(payload: 2))}');
+  print('${t()} ask a->b: ${await bFromA.ask<Object?>(1)}');
+  print('${t()} ask b->a: ${await aFromB.ask<Object?>(2)}');
   print('${t()} idle for $minutes min');
   await Future<void>.delayed(Duration(minutes: minutes));
-  print(
-      '${t()} ask a->b: ${await bFromA.ask<Object?>(LocalMessage(payload: 3))}');
+  print('${t()} ask a->b: ${await bFromA.ask<Object?>(3)}');
   await a.close();
   await b.close();
   await sysA.shutdown();
@@ -69,5 +66,5 @@ Future<void> main(List<String> args) async {
 class _Echo extends Actor {
   @override
   Future<void> onMessage(dynamic message) async =>
-      context.sender?.tell(LocalMessage(payload: message));
+      context.sender?.tell(message);
 }

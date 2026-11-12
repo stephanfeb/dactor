@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:dactor/src/actor_ref.dart';
+
 /// A zone that can be switched off.
 ///
 /// Everything one actor incarnation does runs inside its own [zone]. While
@@ -35,10 +37,21 @@ abstract class TombstoneZone {
 
   /// Forks from [parent], which should be the actor system's own zone so that
   /// one actor's zone never wraps another's.
+  static const _key = #dactor.actorZone;
+
   TombstoneZone(Zone parent) {
-    zone = parent.fork(specification: _specification);
+    zone = parent.fork(specification: _specification, zoneValues: {_key: this});
     _byZone[zone] = this;
   }
+
+  /// The actor whose code is running right now, or null outside any actor.
+  static ActorRef? get currentSelf {
+    final owner = Zone.current[_key];
+    return owner is TombstoneZone ? owner.self : null;
+  }
+
+  /// The reference of the actor this zone runs, once it has one.
+  ActorRef? get self => null;
 
   /// The [TombstoneZone] that [zone] is, or is nested inside.
   static TombstoneZone? of(Zone zone) {

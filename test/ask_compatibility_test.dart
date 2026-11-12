@@ -1,26 +1,15 @@
+// Exercises the deprecated LocalMessage path, kept for one major version.
+// ignore_for_file: deprecated_member_use
 import 'dart:async';
-import 'package:dactor_test/dactor_test.dart';
+import 'support/probe.dart';
 import 'package:test/test.dart';
 import 'package:dactor/dactor.dart';
 
-/// Test message that implements Message but not LocalMessage
-class SimpleMessage implements Message {
+/// A plain message, not a LocalMessage.
+class SimpleMessage {
   final String data;
 
-  @override
-  final String correlationId;
-  @override
-  final ActorRef? replyTo;
-  @override
-  final DateTime timestamp;
-  @override
-  final Map<String, dynamic> metadata;
-
-  SimpleMessage(this.data)
-      : correlationId = 'simple_${DateTime.now().millisecondsSinceEpoch}',
-        replyTo = null,
-        timestamp = DateTime.now(),
-        metadata = {};
+  SimpleMessage(this.data);
 }
 
 /// Test response using AskableResponse helper
@@ -66,7 +55,7 @@ class CompatibilityTestActor extends Actor {
         sender.tell(ManualResponse(42));
       } else if (message == 'error_test') {
         // Test sending wrong response type
-        sender.tell(LocalMessage(payload: 'wrong_type'));
+        sender.tell('wrong_type');
       } else if (message == 'direct_test') {
         // Test LocalMessage payload handling
         sender.tell(SimpleResponse('processed_$message'));
@@ -114,7 +103,7 @@ void main() {
     });
 
     test('should handle manual LocalMessage response', () async {
-      final message = LocalMessage(payload: 'get_number');
+      final message = 'get_number';
       final response =
           await testActor.ask<ManualResponse>(message, Duration(seconds: 1));
 
@@ -123,7 +112,7 @@ void main() {
     });
 
     test('should provide helpful error for wrong response type', () async {
-      final message = LocalMessage(payload: 'error_test');
+      final message = 'error_test';
       expect(
         () => testActor.ask<SimpleResponse>(message, Duration(seconds: 1)),
         throwsA(predicate((e) =>
@@ -135,7 +124,7 @@ void main() {
     });
 
     test('should work with LocalMessage directly', () async {
-      final localMessage = LocalMessage(payload: 'direct_test');
+      final localMessage = 'direct_test';
 
       final response = await testActor.ask<SimpleResponse>(
           localMessage, Duration(seconds: 1));
@@ -178,7 +167,6 @@ void main() {
       final command = TestCommand('test');
 
       expect(command, isA<LocalMessage>());
-      expect(command, isA<Message>());
       expect(command.payload, equals(command));
     });
 
@@ -186,7 +174,6 @@ void main() {
       final response = SimpleResponse('test');
 
       expect(response, isA<LocalMessage>());
-      expect(response, isA<Message>());
       expect(response.payload, equals(response));
     });
   });

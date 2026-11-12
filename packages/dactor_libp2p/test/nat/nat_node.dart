@@ -122,8 +122,7 @@ Future<void> check(String server, String addr, String uri) async {
   final alice = await system.spawn('alice', () => Agent('alice', log));
 
   await step('ask through the relay', () async {
-    final reply = await bob.ask<String>(
-        LocalMessage(payload: 'ping'), const Duration(seconds: 30));
+    final reply = await bob.ask<String>('ping', const Duration(seconds: 30));
     if (reply != 'pong from bob') throw 'got $reply';
     final conns = connsTo(transport, peer);
     if (conns.isEmpty || !conns.every((c) => c.contains('p2p-circuit'))) {
@@ -143,17 +142,16 @@ Future<void> check(String server, String addr, String uri) async {
   });
 
   await step('1 MiB message through the relay', () async {
-    bob.tell(LocalMessage(payload: 'x' * (1 << 20)));
-    final reply = await bob.ask<String>(
-        LocalMessage(payload: 'ping'), const Duration(seconds: 60));
+    bob.tell('x' * (1 << 20));
+    final reply = await bob.ask<String>('ping', const Duration(seconds: 60));
     if (reply != 'pong from bob') throw 'got $reply';
     return null;
   });
 
   await step('the listener asks back over the same connection', () async {
-    await bob.ask<String>(LocalMessage(payload: Introduce('alice', alice)));
-    final reply = await bob.ask<String>(
-        LocalMessage(payload: ('ask', 'alice')), const Duration(seconds: 30));
+    await bob.ask<String>(Introduce('alice', alice));
+    final reply =
+        await bob.ask<String>(('ask', 'alice'), const Duration(seconds: 30));
     if (reply != 'relayed: pong from alice') throw 'got $reply';
     return null;
   });
@@ -177,8 +175,7 @@ Future<void> punch(String server, String addr, String uri) async {
   });
 
   await step('ask through the relay', () async {
-    final reply = await bob.ask<String>(
-        LocalMessage(payload: 'ping'), const Duration(seconds: 30));
+    final reply = await bob.ask<String>('ping', const Duration(seconds: 30));
     if (reply != 'pong from bob') throw 'got $reply';
     return 'over ${connsTo(transport, peer).join(', ')}';
   });
@@ -208,8 +205,7 @@ Future<void> punch(String server, String addr, String uri) async {
   });
 
   await step('ask and 5000 messages in order after the move', () async {
-    final reply = await bob.ask<String>(
-        LocalMessage(payload: 'ping'), const Duration(seconds: 30));
+    final reply = await bob.ask<String>('ping', const Duration(seconds: 30));
     if (reply != 'pong from bob') throw 'got $reply';
     final counter = (await remote.lookup(peer, 'counter')).typed<CounterMsg>();
     for (var i = 1; i <= 5000; i++) {
@@ -230,11 +226,9 @@ Future<void> watch(String server, String addr, String uri) async {
   final bob = remote.resolve(uri);
   final log = <String>[];
   final alice = await system.spawn('alice', () => Agent('alice', log));
-  await alice.ask<String>(LocalMessage(payload: Introduce('bob', bob)),
-      const Duration(seconds: 30));
-  await alice.ask<String>(
-      LocalMessage(payload: ('ask', 'bob')), const Duration(seconds: 30));
-  await alice.ask<String>(LocalMessage(payload: ('watch', 'bob')));
+  await alice.ask<String>(Introduce('bob', bob), const Duration(seconds: 30));
+  await alice.ask<String>(('ask', 'bob'), const Duration(seconds: 30));
+  await alice.ask<String>(('watch', 'bob'));
   await Future<void>.delayed(const Duration(milliseconds: 500));
   print('WATCHING');
   final since = Stopwatch()..start();

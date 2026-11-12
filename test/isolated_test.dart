@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:dactor/dactor.dart';
+import 'package:dactor/spi.dart';
 import 'package:test/test.dart';
 
 // Everything an actor in another isolate does must be observed through
@@ -54,28 +55,27 @@ class Probe extends Actor {
     switch (message) {
       case 'observe':
         observer = context.sender;
-        context.sender?.tell(LocalMessage(payload: 'observing'));
+        context.sender?.tell('observing');
       case 'echo-later':
         final sender = context.sender;
         await Future<void>.delayed(const Duration(milliseconds: 10));
-        sender?.tell(LocalMessage(payload: 'later'));
+        sender?.tell('later');
       case 'start-timer':
         context.timers
             .startSingleTimer('t', 'tick', const Duration(milliseconds: 10));
       case 'tick':
         ticks++;
-        observer?.tell(LocalMessage(payload: 'ticked $ticks'));
+        observer?.tell('ticked $ticks');
       case 'self':
-        context.self.tell(LocalMessage(payload: 'tick'));
+        context.self.tell('tick');
       case 'spawn-child':
         final child = await context.spawn('inner-child', () => Counter());
-        child.tell(LocalMessage(payload: Add(5)));
-        final value = await child.ask<int>(LocalMessage(payload: Get()));
-        context.sender?.tell(LocalMessage(payload: value));
+        child.tell(Add(5));
+        final value = await child.ask<int>(Get());
+        context.sender?.tell(value);
       case 'ask-observer':
-        final answer =
-            await observer!.ask<String>(LocalMessage(payload: 'question'));
-        context.sender?.tell(LocalMessage(payload: 'observer said $answer'));
+        final answer = await observer!.ask<String>('question');
+        context.sender?.tell('observer said $answer');
       case 'boom':
         throw StateError('boom');
       case 'stray':
@@ -83,13 +83,12 @@ class Probe extends Actor {
       case 'spin':
         while (true) {}
       case 'isolate-name':
-        context.sender?.tell(LocalMessage(payload: _isolateName()));
+        context.sender?.tell(_isolateName());
     }
   }
 
   @override
-  void postStop() =>
-      observer?.tell(LocalMessage(payload: 'stopped after $ticks ticks'));
+  void postStop() => observer?.tell('stopped after $ticks ticks');
 }
 
 String _isolateName() => Isolate.current.debugName ?? '';
@@ -102,7 +101,7 @@ class Observer extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (message == 'question') {
-      context.sender?.tell(LocalMessage(payload: 'answer'));
+      context.sender?.tell('answer');
     } else {
       seen.add(message);
     }
@@ -154,9 +153,9 @@ void main() {
         final observer = await system.spawn('observer', () => Observer(seen));
         final ref = await system.spawn('probe', () => place(Probe.new),
             supervision: supervision);
-        await ref.ask<String>(LocalMessage(payload: 'observe')).then((_) {});
+        await ref.ask<String>('observe').then((_) {});
         // Asked through a temporary ref; register the real observer too.
-        ref.tell(LocalMessage(payload: 'observe'), sender: observer);
+        sendAs(observer, () => ref.tell('observe'));
         await settle();
         seen.clear();
         return (ref, seen);
@@ -179,27 +178,25 @@ void main() {
 
       test('a reply sent after an await still arrives', () async {
         final (ref, _) = await probe();
-        expect(await ref.ask<String>(LocalMessage(payload: 'echo-later')),
-            'later');
+        expect(await ref.ask<String>('echo-later'), 'later');
       });
 
       test('timers and self-sends work inside', () async {
         final (ref, seen) = await probe();
-        ref.tell(LocalMessage(payload: 'start-timer'));
-        ref.tell(LocalMessage(payload: 'self'));
+        ref.tell('start-timer');
+        ref.tell('self');
         await settle(120);
         expect(seen, unorderedEquals(['ticked 1', 'ticked 2']));
       });
 
       test('it can spawn and use actors of its own', () async {
         final (ref, _) = await probe();
-        expect(await ref.ask<int>(LocalMessage(payload: 'spawn-child')), 5);
+        expect(await ref.ask<int>('spawn-child'), 5);
       });
 
       test('it can ask the actor that sent it a message', () async {
         final (ref, _) = await probe();
-        expect(await ref.ask<String>(LocalMessage(payload: 'ask-observer')),
-            'observer said answer');
+        expect(await ref.ask<String>('ask-observer'), 'observer said answer');
       });
 
       test('a failure with restart starts over with fresh state', () async {
@@ -238,7 +235,7 @@ void main() {
       test('an error nobody awaited is a failure too', () async {
         final (ref, _) = await probe(
             supervision: const OneForOneStrategy(decider: _restart));
-        ref.tell(LocalMessage(payload: 'stray'));
+        ref.tell('stray');
         await settle(150);
         expect(ref.isAlive, isTrue);
         expect(metrics.getCounter('actors.restarted'), 1);
@@ -246,7 +243,7 @@ void main() {
 
       test('stop runs postStop', () async {
         final (ref, seen) = await probe();
-        ref.tell(LocalMessage(payload: 'self'));
+        ref.tell('self');
         await settle();
         await system.stop(ref);
         await settle(150);
@@ -270,13 +267,10 @@ void main() {
         final pool = await system.spawn('pool', () => place(Counter.new),
             pool: Pool(workerCount: 3));
         for (var i = 0; i < 6; i++) {
-          pool.tell(LocalMessage(payload: Add(1)));
+          pool.tell(Add(1));
         }
         await settle();
-        final totals = [
-          for (var i = 0; i < 3; i++)
-            await pool.ask<int>(LocalMessage(payload: Get()))
-        ];
+        final totals = [for (var i = 0; i < 3; i++) await pool.ask<int>(Get())];
         expect(totals, [2, 2, 2]);
       });
     });
@@ -296,7 +290,7 @@ void main() {
               unresponsiveAfter: const Duration(milliseconds: 150)),
           supervision: const OneForOneStrategy(decider: _restart));
 
-      stuck.tell(LocalMessage(payload: 'spin'));
+      stuck.tell('spin');
       // While it spins, everyone else keeps working.
       for (var i = 0; i < 20; i++) {
         bystander.tell(Add(1));
@@ -310,8 +304,7 @@ void main() {
       expect(metrics.getCounter('actors.restarted'), 1);
       expect(stuck.isAlive, isTrue);
       // The replacement answers.
-      expect(await stuck.ask<String>(LocalMessage(payload: 'echo-later')),
-          'later');
+      expect(await stuck.ask<String>('echo-later'), 'later');
     });
 
     test('an unsupervised stuck actor is killed and stopped', () async {
@@ -323,7 +316,7 @@ void main() {
               heartbeat: const Duration(milliseconds: 20),
               unresponsiveAfter: const Duration(milliseconds: 100)));
       stuck.watch(watcher);
-      stuck.tell(LocalMessage(payload: 'spin'));
+      stuck.tell('spin');
       await settle(400);
       expect(stuck.isAlive, isFalse);
       expect(
@@ -338,8 +331,8 @@ void main() {
     test('run in a different isolate', () async {
       final here = await system.spawn('here', () => Probe());
       final there = await system.spawn('there', () => Isolated(Probe.new));
-      final a = await here.ask<String>(LocalMessage(payload: 'isolate-name'));
-      final b = await there.ask<String>(LocalMessage(payload: 'isolate-name'));
+      final a = await here.ask<String>('isolate-name');
+      final b = await there.ask<String>('isolate-name');
       expect(b, 'dactor:there');
       expect(a, isNot(b));
     });
@@ -350,7 +343,7 @@ void main() {
       final ref = (await system.spawn('counter', () => Isolated(Counter.new)))
           .typed<CounterMsg>();
       // An ActorRef of this system does not cross.
-      ref.untyped.tell(LocalMessage(payload: ref.untyped));
+      ref.untyped.tell(ref.untyped);
       ref.tell(Add(1));
       expect(await ref.call(Get()), 1);
       expect(system.deadLetterQueue.length, 1);

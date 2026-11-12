@@ -41,8 +41,9 @@ class CodeLock extends GenStatem<Door, List<int>, DoorEvent> {
   Transition<Door, List<int>> onEvent(
           Door state, DoorEvent event, List<int> data) =>
       switch ((state, event)) {
-        (_, Status()) => keep(reply: '${state.name} ${data.join()}'),
-        (_, Shutdown()) => halt(reply: 'closing'),
+        (_, final Status q) =>
+          keep(reply: q.answer('${state.name} ${data.join()}')),
+        (_, final Shutdown q) => halt(reply: q.answer('closing')),
         (_, Break()) => throw StateError('jammed'),
         (Door.locked, Digit(:final digit)) => _digit([...data, digit]),
         (Door.locked, Push()) => postpone(),
@@ -164,8 +165,8 @@ void main() {
 
   test('leaving a state cancels its timeout', () async {
     final ref = await system.spawn('stepper', () => Stepper());
-    ref.tell(LocalMessage(payload: 'go'));
-    ref.tell(LocalMessage(payload: 'go'));
+    ref.tell('go');
+    ref.tell('go');
     await settle(50);
     expect(_log, ['default timeout in c']);
     // Once only: keep() without a timeout does not start another.
@@ -190,7 +191,7 @@ void main() {
       () async {
     final ref = await system.spawn('stepper', () => Stepper());
     for (final event in ['y', 'x', 'z', 'go']) {
-      ref.tell(LocalMessage(payload: event));
+      ref.tell(event);
     }
     await settle();
     // z is handled at once in a. go enters b: y is postponed again, x is
@@ -218,4 +219,89 @@ void main() {
     await settle();
     expect(await door.call(Status()), 'locked ');
   });
+
+  group('timeouts', () {
+    late ActorRef ref;
+    setUp(() async => ref = await system.spawn('t', () => Timeouts()));
+    void send(String event) => ref.tell(event);
+
+    test('an event timeout fires when nothing arrives', () async {
+      send('idle');
+      await settle(60);
+      expect(_log, ['event timeout in a']);
+      expect(await system.sys.getState(ref), (Phase.a, 1));
+    });
+
+    test('any message cancels an event timeout', () async {
+      send('idle');
+      await settle(10);
+      send('ping');
+      await settle(60);
+      expect(_log, isEmpty);
+    });
+
+    test('a generic timeout survives a change of state', () async {
+      send('arm');
+      send('move');
+      send('move');
+      await settle(60);
+      expect(_log, ['tick in c']);
+    });
+
+    test('setting a generic timeout again restarts it', () async {
+      send('arm');
+      await settle(20);
+      send('arm');
+      await settle(20);
+      expect(_log, isEmpty);
+      await settle(30);
+      expect(_log, ['tick in a']);
+    });
+
+    test('a null duration cancels a generic timeout', () async {
+      send('arm');
+      send('disarm');
+      await settle(60);
+      expect(_log, isEmpty);
+    });
+
+    test('other messages do not cancel a generic timeout', () async {
+      send('arm');
+      for (var i = 0; i < 3; i++) {
+        await settle(5);
+        send('ping');
+      }
+      await settle(50);
+      expect(_log, ['tick in a']);
+    });
+  });
+}
+
+/// Events are strings: 'idle' arms an event timeout, 'ping' is any message,
+/// 'arm' and 'disarm' set and cancel a generic timeout, 'move' changes state.
+class Timeouts extends GenStatem<Phase, int, String> {
+  @override
+  (Phase, int) init() => (Phase.a, 0);
+
+  @override
+  Transition<Phase, int> onEvent(Phase state, String event, int data) =>
+      switch (event) {
+        'idle' => keep(eventTimeout: const Duration(milliseconds: 30)),
+        'arm' => keep(timeouts: {'tick': const Duration(milliseconds: 30)}),
+        'disarm' => keep(timeouts: {'tick': null}),
+        'move' => next(Phase.values[(state.index + 1) % 3]),
+        _ => keep(),
+      };
+
+  @override
+  Transition<Phase, int> onEventTimeout(Phase state, int data) {
+    _log.add('event timeout in ${state.name}');
+    return keep(data: data + 1);
+  }
+
+  @override
+  Transition<Phase, int> onGenericTimeout(Object name, Phase state, int data) {
+    _log.add('$name in ${state.name}');
+    return keep();
+  }
 }

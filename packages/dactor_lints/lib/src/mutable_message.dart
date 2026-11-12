@@ -16,9 +16,9 @@ import 'dactor_code.dart';
 /// other way round, which is exactly the shared mutable state the actor model
 /// exists to rule out.
 ///
-/// Reported in two places: on each non-final field of a class that
-/// implements dactor's `Message`, and where an object of any other class
-/// with a non-final field is sent as a payload or published as an event.
+/// Reported in two places: on each non-final field of a class that extends
+/// dactor's deprecated `LocalMessage`, and where an object of any other
+/// class with a non-final field is sent or published as an event.
 class MutableMessage extends AnalysisRule {
   static const LintCode code = LintCode(
     'dactor_mutable_message',
@@ -59,7 +59,7 @@ class _Visitor extends SimpleAstVisitor<void> {
     final element = node.declaredFragment?.element;
     if (element == null ||
         isFromDactor(element) ||
-        !isDactorSubtype(element, 'Message')) {
+        !isDactorSubtype(element, 'LocalMessage')) {
       return;
     }
     for (final field in mutableFields(element)) {
@@ -87,11 +87,11 @@ class _Visitor extends SimpleAstVisitor<void> {
       final type = sent.staticType;
       if (type is! InterfaceType) continue;
       final element = type.element;
-      // Message classes are reported where they are declared, and an actor
+      // LocalMessage classes are reported where they are declared, and an actor
       // sending itself is dactor_captured_actor_state's finding.
       if (isFromSdk(element) ||
           isFromDactor(element) ||
-          isDactorSubtype(element, 'Message') ||
+          isDactorSubtype(element, 'LocalMessage') ||
           isDactorSubtype(element, 'Actor')) {
         continue;
       }
