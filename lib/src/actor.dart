@@ -4,6 +4,8 @@ import 'package:meta/meta.dart';
 
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/actor_system.dart';
+import 'package:dactor/src/exit_reason.dart';
+import 'package:dactor/src/sending.dart';
 import 'package:dactor/src/timer_scheduler.dart';
 
 /// The context of an actor, providing information about its environment and
@@ -15,8 +17,15 @@ abstract class ActorContext {
   /// A reference to the actor system.
   ActorSystem get system;
 
-  /// The sender of the current message.
+  /// The sender of the current message: the actor whose code told it, or
+  /// null if it came from outside any actor or from the runtime.
   ActorRef? get sender;
+
+  /// Tells [target] [message] with the current message's [sender] as its
+  /// sender, so that [target] answers whoever asked. For routers and other
+  /// actors that pass work on.
+  void forward(ActorRef target, Object? message) =>
+      Sending.as(sender, () => target.tell(message));
 
   /// The timer scheduler for this actor.
   ///
@@ -34,6 +43,45 @@ abstract class ActorContext {
 
   /// Watches an actor for termination.
   void watch(ActorRef actor);
+
+  /// Stops watching [actor], and drops any [Terminated] from it already
+  /// waiting in this actor's mailbox, so that none is handled after this
+  /// call (Erlang's `demonitor` with `flush`).
+  void unwatch(ActorRef actor);
+
+  /// Links this actor with [other], in both directions.
+  ///
+  /// When either one ends, the other is told. An actor that traps exits (see
+  /// [trapExits]) receives an [ExitSignal] message. One that does not ignores
+  /// a normal exit and fails with [LinkedActorExited] on any other, which its
+  /// supervisor then handles like any failure.
+  ///
+  /// A link belongs to the two incarnations that made it. A restart of either
+  /// actor counts as that incarnation ending: the other side is signalled and
+  /// the link is gone. Link again in `preStart` to keep the pairing.
+  ///
+  /// Linking to an actor that is already dead signals [NoProcExit] at once.
+  void link(ActorRef other);
+
+  /// Removes the link with [other], if there is one.
+  void unlink(ActorRef other);
+
+  /// Whether exit signals from linked actors arrive as [ExitSignal] messages
+  /// instead of bringing this actor down. False by default, and again after
+  /// every restart; set it in `preStart`.
+  bool get trapExits;
+  set trapExits(bool value);
+
+  /// Waits, inside a handler, for the next message of type [T] that passes
+  /// [where], and returns it. Other messages stay in the mailbox, in order,
+  /// and are handled as usual once the current handler has returned.
+  ///
+  /// Fails with a [TimeoutException] if nothing matches within [timeout].
+  ///
+  /// Use it sparingly. Every call scans the whole mailbox, so on an actor
+  /// with a backlog it is slow, and an actor waiting here handles nothing
+  /// else.
+  Future<T> receive<T>({bool Function(T message)? where, Duration? timeout});
 
   /// Restarts [child] in place.
   ///

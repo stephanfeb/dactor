@@ -1,14 +1,11 @@
 import 'package:dactor/dactor.dart';
-import 'package:dactor/src/local_message.dart';
-import 'package:dactor/src/metrics/metrics.dart';
 import 'package:test/test.dart';
 
 class TestActor extends Actor {
   @override
   Future<void> onMessage(message) async {
     if (message == 'hello') {
-      context.sender
-          ?.tell(LocalMessage(payload: 'world'), sender: context.self);
+      context.sender?.tell('world');
     } else if (message == 'fail') {
       throw Exception('failed');
     }
@@ -52,7 +49,7 @@ void main() {
 
     test('should increment processed messages count', () async {
       final actor = await system.spawn('test', () => TestActor());
-      actor.tell(LocalMessage(payload: 'hello'));
+      actor.tell('hello');
       await Future.delayed(
           Duration(milliseconds: 100)); // Allow time for message processing
       expect(metrics.getCounter('messages.processed'), greaterThan(0));
@@ -60,14 +57,14 @@ void main() {
 
     test('should record message processing time', () async {
       final actor = await system.spawn('test', () => TestActor());
-      actor.tell(LocalMessage(payload: 'hello'));
+      actor.tell('hello');
       await Future.delayed(Duration(milliseconds: 100));
       expect(metrics.getTimings('messages.processing_time'), isNotEmpty);
     });
 
     test('should increment failed actors count', () async {
       final actor = await system.spawn('test', () => TestActor());
-      actor.tell(LocalMessage(payload: 'fail'));
+      actor.tell('fail');
       await Future.delayed(Duration(milliseconds: 100));
       expect(metrics.getCounter('actors.failed'), 1);
     });
@@ -80,15 +77,15 @@ void main() {
     test('should increment dead letters count', () async {
       final actor = await system.spawn('test', () => TestActor());
       await system.stop(actor);
-      actor.tell(LocalMessage(payload: 'late message'));
+      actor.tell('late message');
       await Future.delayed(Duration(milliseconds: 100));
       expect(metrics.getCounter('dead_letters'), greaterThan(0));
     });
 
     test('should update mailbox size gauge', () async {
       final actor = await system.spawn('test', () => TestActor());
-      actor.tell(LocalMessage(payload: 'message1'));
-      actor.tell(LocalMessage(payload: 'message2'));
+      actor.tell('message1');
+      actor.tell('message2');
       await Future.delayed(Duration(milliseconds: 100));
       expect(metrics.getGauge('mailbox.size'), isNotNull);
     });

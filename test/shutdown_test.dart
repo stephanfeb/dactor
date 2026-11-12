@@ -89,7 +89,7 @@ void main() {
       final ref = await system.spawn('a', () => _TickerActor([]));
       await system.shutdown();
 
-      ref.tell(LocalMessage(payload: 'late'));
+      ref.tell('late');
 
       expect(system.deadLetterQueue.length, 1);
       final letter = system.deadLetterQueue.dequeue();

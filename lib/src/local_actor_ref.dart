@@ -1,14 +1,20 @@
 import 'dart:async';
 
+import 'package:meta/meta.dart';
+
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/dead_letter_queue.dart';
+import 'package:dactor/src/exit_reason.dart';
 import 'package:dactor/src/mailbox.dart';
 import 'package:dactor/src/local_message.dart';
-import 'package:dactor/src/message.dart';
+import 'package:dactor/src/sending.dart';
 import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor/src/ask_config.dart';
 import 'package:dactor/src/system_messages.dart';
 
+// Never copied into another isolate by accident: a message or closure that
+// holds one fails to send instead.
+@pragma('vm:isolate-unsendable')
 class LocalActorRef implements ActorRef {
   @override
   final String id;
@@ -18,6 +24,7 @@ class LocalActorRef implements ActorRef {
   final AskConfig _askConfig;
   final _watchers = <ActorRef>[];
   bool _isAlive = true;
+  static int _asks = 0;
 
   LocalActorRef(this.id, this._mailbox, this._deadLetterQueue, this._tracer,
       this._askConfig);
@@ -26,49 +33,49 @@ class LocalActorRef implements ActorRef {
   bool get isAlive => _isAlive;
 
   @override
-  void tell(Message message, {ActorRef? sender}) {
+  void tell(Object? message) {
+    final payload = unwrapLegacy(message);
+    final sender = Sending.sender;
+    if ((payload is Terminated || payload is ExitSignal) && !Sending.isSystem) {
+      // Only the runtime reports endings; anyone else's is a forgery.
+      _deadLetterQueue.enqueue(DeadLetter(payload, sender, this));
+      return;
+    }
     if (_isAlive) {
-      final LocalMessage localMessage;
-      if (message is LocalMessage) {
-        localMessage = (sender != null)
-            ? LocalMessage(
-                payload: message.payload,
-                sender: sender,
-                correlationId: message.correlationId,
-                replyTo: message.replyTo,
-                timestamp: message.timestamp,
-                metadata: message.metadata,
-              )
-            : message;
-      } else {
-        localMessage = LocalMessage(payload: message, sender: sender);
-      }
-
-      _tracer.record(TraceEvent(
-          localMessage.correlationId, 'sent', this, localMessage.payload));
-      _mailbox.enqueue(localMessage);
+      final envelope = Envelope(payload, sender);
+      _tracer.record(TraceEvent(envelope.traceId, 'sent', this, payload));
+      _mailbox.enqueue(envelope);
     } else {
-      final lMessage =
-          message is LocalMessage ? message : LocalMessage(payload: message);
-      _deadLetterQueue.enqueue(
-          DeadLetter(message, sender ?? lMessage.sender ?? this, this));
+      _deadLetterQueue.enqueue(DeadLetter(payload, sender, this));
+    }
+  }
+
+  /// Puts [envelope] back in the mailbox as it is, for a simulation that
+  /// delayed it.
+  @internal
+  void redeliver(Envelope envelope) {
+    if (_isAlive) {
+      _mailbox.enqueue(envelope);
+    } else {
+      _deadLetterQueue
+          .enqueue(DeadLetter(envelope.payload, envelope.sender, this));
     }
   }
 
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) {
+  Future<T> ask<T>(Object? message, [Duration? timeout]) {
     return askWithRetry<T>(message, timeout: timeout);
   }
 
   /// Enhanced ask method with configurable retry logic and better error handling.
   Future<T> askWithRetry<T>(
-    Message message, {
+    Object? message, {
     Duration? timeout,
     int? maxRetries,
     bool? enableRetries,
   }) async {
     if (!_isAlive) {
-      throw StateError('Actor ${id} is not alive');
+      throw StateError('Actor $id is not alive');
     }
 
     final effectiveTimeout = timeout ?? _askConfig.defaultTimeout;
@@ -77,17 +84,15 @@ class LocalActorRef implements ActorRef {
 
     int attemptCount = 0;
     Object? lastError;
+    final correlationId = 'ask${++_asks}';
 
     while (attemptCount <= effectiveMaxRetries) {
       try {
-        return await _performAsk<T>(message, effectiveTimeout, attemptCount);
-      } catch (error, stackTrace) {
+        return await _performAsk<T>(
+            message, effectiveTimeout, attemptCount, correlationId);
+      } catch (error) {
         lastError = error;
         attemptCount++;
-
-        final correlationId = message is LocalMessage
-            ? message.correlationId
-            : 'ask_${DateTime.now().millisecondsSinceEpoch}';
 
         if (!effectiveEnableRetries || attemptCount > effectiveMaxRetries) {
           _tracer.record(TraceEvent(
@@ -140,31 +145,17 @@ class LocalActorRef implements ActorRef {
   }
 
   /// Performs a single ask attempt without retry logic.
-  Future<T> _performAsk<T>(
-      Message message, Duration timeout, int attemptNumber) {
+  Future<T> _performAsk<T>(Object? message, Duration timeout, int attemptNumber,
+      String correlationId) {
     if (!_isAlive) {
-      throw StateError('Actor ${id} is not alive');
+      throw StateError('Actor $id is not alive');
     }
 
     final completer = Completer<T>();
     final tempRef = _TemporaryActorRef<T>(completer, attemptNumber);
 
-    final request = message is LocalMessage
-        ? LocalMessage(
-            payload: message.payload,
-            sender: tempRef,
-            correlationId: message.correlationId,
-            replyTo: message.replyTo,
-            timestamp: message.timestamp,
-            metadata: message.metadata,
-          )
-        : LocalMessage(
-            payload: message,
-            sender: tempRef,
-          );
-
     _tracer.record(TraceEvent(
-      request.correlationId,
+      correlationId,
       'ask_attempt',
       this,
       {
@@ -173,12 +164,13 @@ class LocalActorRef implements ActorRef {
       },
     ));
 
-    tell(request);
+    // The answer goes to the temporary reference, whoever is asking.
+    Sending.as(tempRef, () => tell(message));
 
     return completer.future.timeout(timeout, onTimeout: () {
       tempRef.stop();
       throw TimeoutException(
-        'Ask request to actor ${id} timed out after ${timeout.inMilliseconds}ms (attempt ${attemptNumber + 1})',
+        'Ask request to actor $id timed out after ${timeout.inMilliseconds}ms (attempt ${attemptNumber + 1})',
         timeout,
       );
     });
@@ -186,15 +178,26 @@ class LocalActorRef implements ActorRef {
 
   @override
   void watch(ActorRef watcher) {
+    if (!_isAlive) {
+      // Too late to see it end; say so, as a link would.
+      Sending.system(watcher, Terminated(this, reason: const NoProcExit()));
+      return;
+    }
     _watchers.add(watcher);
   }
 
-  void stop() {
+  @override
+  void unwatch(ActorRef watcher) => _watchers.removeWhere((w) => w == watcher);
+
+  void stop([ExitReason reason = const NormalExit()]) {
     if (!_isAlive) return;
     _isAlive = false;
     _mailbox.dispose();
-    for (final watcher in _watchers) {
-      watcher.tell(LocalMessage(payload: Terminated(this)));
+    // Taken first: a watcher may unwatch while it is being told.
+    final watchers = [..._watchers];
+    _watchers.clear();
+    for (final watcher in watchers) {
+      Sending.system(watcher, Terminated(this, reason: reason));
     }
   }
 }
@@ -212,32 +215,19 @@ class _TemporaryActorRef<T> implements ActorRef {
   bool get isAlive => !_completer.isCompleted;
 
   @override
-  void tell(Message message, {ActorRef? sender}) {
-    if (isAlive) {
-      try {
-        final localMessage = message as LocalMessage;
-        final payload = localMessage.payload;
-
-        if (payload is T) {
-          _completer.complete(payload);
-        } else {
-          _completer.completeError(
-              StateError('Ask response type mismatch. Expected: $T, '
-                  'but received: ${payload.runtimeType}. '
-                  'Response messages should extend LocalMessage and override '
-                  'the payload getter to return the response object itself.'));
-        }
-      } catch (e) {
-        _completer
-            .completeError(StateError('Ask response must be a LocalMessage. '
-                'Received: ${message.runtimeType}. '
-                'Exception: $e'));
-      }
+  void tell(Object? message) {
+    if (!isAlive) return;
+    final payload = unwrapLegacy(message);
+    if (payload is T) {
+      _completer.complete(payload);
+    } else {
+      _completer.completeError(StateError('Ask response type mismatch. '
+          'Expected: $T, but received: ${payload.runtimeType}'));
     }
   }
 
   @override
-  Future<R> ask<R>(Message message, [Duration? timeout]) {
+  Future<R> ask<R>(Object? message, [Duration? timeout]) {
     throw UnsupportedError('Cannot ask a temporary actor reference.');
   }
 
@@ -245,6 +235,9 @@ class _TemporaryActorRef<T> implements ActorRef {
   void watch(ActorRef watcher) {
     throw UnsupportedError('Cannot watch a temporary actor reference.');
   }
+
+  @override
+  void unwatch(ActorRef watcher) {}
 
   void stop() {
     if (isAlive) {

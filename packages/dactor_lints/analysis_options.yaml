@@ -1,0 +1,5 @@
+# Kept separate from the dactor package's options, which include
+# package:lints; this package does not depend on it.
+analyzer:
+  language:
+    strict-casts: true

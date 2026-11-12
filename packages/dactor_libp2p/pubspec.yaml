@@ -1,0 +1,19 @@
+name: dactor_libp2p
+description: A libp2p transport for dactor_remote, with Noise encryption and relays.
+version: 0.1.0-dev
+publish_to: none
+
+environment:
+  sdk: ^3.5.1
+
+dependencies:
+  dactor:
+    path: ../..
+  dactor_remote:
+    path: ../dactor_remote
+  dart_libp2p: ^4.12.1
+
+dev_dependencies:
+  lints: ^4.0.0
+  logging: ^1.2.0
+  test: ^1.24.0

@@ -29,7 +29,7 @@ class _Worker extends Actor {
     handled++;
     received.add('$message@$instance');
     if (message is Map && message['replyTo'] is ActorRef) {
-      (message['replyTo'] as ActorRef).tell(LocalMessage(payload: 'pong'));
+      (message['replyTo'] as ActorRef).tell('pong');
     }
   }
 
@@ -109,7 +109,7 @@ void main() {
   group('restart keeps the ActorRef', () {
     test('same ref object, still alive, still registered', () async {
       final s = await supervised();
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle();
 
       expect(s.child.isAlive, isTrue);
@@ -119,9 +119,9 @@ void main() {
 
     test('messages through the old ref reach the new instance', () async {
       final s = await supervised();
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle();
-      s.child.tell(LocalMessage(payload: 'after'));
+      s.child.tell('after');
       await _settle();
 
       expect(_Worker.received, ['after@2']);
@@ -130,12 +130,12 @@ void main() {
 
     test('state is reset: the new instance starts fresh', () async {
       final s = await supervised();
-      s.child.tell(LocalMessage(payload: 'a'));
-      s.child.tell(LocalMessage(payload: 'b'));
+      s.child.tell('a');
+      s.child.tell('b');
       await _settle();
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle();
-      s.child.tell(LocalMessage(payload: 'c'));
+      s.child.tell('c');
       await _settle();
 
       expect(_Worker.received, ['a@1', 'b@1', 'c@2']);
@@ -145,10 +145,10 @@ void main() {
   group('restart keeps the mailbox', () {
     test('messages queued behind the failing one are delivered', () async {
       final s = await supervised();
-      s.child.tell(LocalMessage(payload: 'a'));
-      s.child.tell(LocalMessage(payload: 'boom'));
-      s.child.tell(LocalMessage(payload: 'b'));
-      s.child.tell(LocalMessage(payload: 'c'));
+      s.child.tell('a');
+      s.child.tell('boom');
+      s.child.tell('b');
+      s.child.tell('c');
       await _settle(150);
 
       expect(_Worker.received, ['a@1', 'b@2', 'c@2']);
@@ -160,10 +160,10 @@ void main() {
           factory: () =>
               _Worker(preStartDelay: const Duration(milliseconds: 40)));
       await _settle();
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle(10);
       // Restart is in progress: preStart of instance 2 is still sleeping.
-      s.child.tell(LocalMessage(payload: 'during'));
+      s.child.tell('during');
       await _settle(10);
       expect(_Worker.received, isEmpty);
 
@@ -180,7 +180,7 @@ void main() {
           await system.spawnAndGetActor('watcher', () => _Collector());
       s.child.watch(spawned.ref);
 
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle();
 
       expect((spawned.actor as _Collector).messages, isEmpty);
@@ -190,7 +190,7 @@ void main() {
       final s = await supervised();
       system.eventBus.subscribe<_Event>(s.child);
 
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle();
       expect(system.eventBus.subscriptions[_Event], contains(s.child));
 
@@ -201,9 +201,9 @@ void main() {
 
     test('supervisor still tracks the child under the same ref', () async {
       final s = await supervised();
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle();
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle();
 
       expect(_Worker.log, [
@@ -222,7 +222,7 @@ void main() {
       await _settle(30);
       expect(_TickingWorker.ticks, greaterThan(0));
 
-      s.child.tell(LocalMessage(payload: 'boom'));
+      s.child.tell('boom');
       await _settle(30);
       expect(_Worker.log, ['preStart#1', 'postStop#1', 'preStart#2']);
 
@@ -243,7 +243,7 @@ void main() {
       final c1 = await sup.supervise('c1', () => _Worker());
       final c2 = await sup.supervise('c2', () => _Worker());
 
-      c1.tell(LocalMessage(payload: 'boom'));
+      c1.tell('boom');
       await _settle(100);
 
       expect(c1.isAlive, isTrue);
@@ -253,8 +253,8 @@ void main() {
       expect(_Worker.log, containsAll(['postStop#1', 'postStop#2']));
       expect(_Worker.log.where((e) => e.startsWith('preStart')).length, 4);
 
-      c1.tell(LocalMessage(payload: 'x'));
-      c2.tell(LocalMessage(payload: 'y'));
+      c1.tell('x');
+      c2.tell('y');
       await _settle();
       expect(_Worker.received, unorderedEquals(['x@3', 'y@4']));
     });
@@ -264,11 +264,11 @@ void main() {
     test('a worker failure does not lose a slot', () async {
       final pool = await system.spawn('pool', () => _Worker(),
           pool: Pool(workerCount: 2));
-      pool.tell(LocalMessage(payload: 'boom'));
+      pool.tell('boom');
       await _settle();
 
       for (var i = 0; i < 10; i++) {
-        pool.tell(LocalMessage(payload: 'm$i'));
+        pool.tell('m$i');
       }
       await _settle(150);
 
@@ -287,7 +287,7 @@ void main() {
         return starts == 1 ? _Worker() : _BadStart();
       });
 
-      child.tell(LocalMessage(payload: 'boom'));
+      child.tell('boom');
       await _settle();
 
       expect(child.isAlive, isFalse);

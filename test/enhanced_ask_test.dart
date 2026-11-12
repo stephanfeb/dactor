@@ -1,5 +1,5 @@
 import 'package:dactor/dactor.dart';
-import 'package:dactor_test/dactor_test.dart';
+import 'support/probe.dart';
 import 'package:test/test.dart';
 import 'dart:async';
 
@@ -11,7 +11,7 @@ class TimeoutActor extends Actor {
   Future<void> onMessage(dynamic message) async {
     if (message is SetShouldTimeout) {
       _shouldTimeout = message.shouldTimeout;
-      context.sender?.tell(LocalMessage(payload: 'timeout_config_set'));
+      context.sender?.tell('timeout_config_set');
       return;
     }
 
@@ -22,7 +22,7 @@ class TimeoutActor extends Actor {
       }
 
       // Success case
-      context.sender?.tell(LocalMessage(payload: 'pong'));
+      context.sender?.tell('pong');
     }
   }
 }
@@ -31,7 +31,7 @@ class TimeoutActor extends Actor {
 class EchoActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
-    context.sender?.tell(LocalMessage(payload: 'echo: $message'));
+    context.sender?.tell('echo: $message');
   }
 }
 
@@ -64,14 +64,12 @@ void main() {
           await testSystem.spawn('timeout_test', () => TimeoutActor());
 
       // Configure actor to timeout (not respond)
-      await testActor.ask(
-          LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
+      await testActor.ask(SetShouldTimeout(true), Duration(seconds: 1));
 
       final stopwatch = Stopwatch()..start();
 
       try {
-        await testActor
-            .ask(LocalMessage(payload: 'ping')); // Use default timeout
+        await testActor.ask('ping'); // Use default timeout
         fail('Should have timed out');
       } catch (e) {
         expect(e, isA<TimeoutException>());
@@ -99,13 +97,12 @@ void main() {
           await testSystem.spawn('retry_test', () => TimeoutActor());
 
       // Configure actor to timeout
-      await testActor.ask(
-          LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
+      await testActor.ask(SetShouldTimeout(true), Duration(seconds: 1));
 
       final stopwatch = Stopwatch()..start();
 
       try {
-        await testActor.ask(LocalMessage(payload: 'ping'));
+        await testActor.ask('ping');
         fail('Should have timed out after retries');
       } catch (e) {
         expect(e, isA<TimeoutException>());
@@ -128,7 +125,7 @@ void main() {
       final testActor =
           await testSystem.spawn('success_test', () => EchoActor());
 
-      final result = await testActor.ask(LocalMessage(payload: 'hello'));
+      final result = await testActor.ask('hello');
       expect(result, 'echo: hello');
 
       await testSystem.shutdown();
@@ -143,14 +140,12 @@ void main() {
           await testSystem.spawn('no_retry_test', () => TimeoutActor());
 
       // Configure actor to timeout
-      await testActor.ask(
-          LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
+      await testActor.ask(SetShouldTimeout(true), Duration(seconds: 1));
 
       final stopwatch = Stopwatch()..start();
 
       try {
-        await testActor.ask(
-            LocalMessage(payload: 'ping'), Duration(milliseconds: 100));
+        await testActor.ask('ping', Duration(milliseconds: 100));
         fail('Should have timed out');
       } catch (e) {
         expect(e, isA<TimeoutException>());
@@ -206,7 +201,7 @@ void main() {
       // Test that we can override timeout
       final localRef = testActor as LocalActorRef;
       final result = await localRef.askWithRetry(
-        LocalMessage(payload: 'test'),
+        'test',
         timeout: Duration(seconds: 2),
       );
 
@@ -228,11 +223,10 @@ void main() {
           await testSystem.spawn('error_message_test', () => TimeoutActor());
 
       // Configure actor to timeout
-      await testActor.ask(
-          LocalMessage(payload: SetShouldTimeout(true)), Duration(seconds: 1));
+      await testActor.ask(SetShouldTimeout(true), Duration(seconds: 1));
 
       try {
-        await testActor.ask(LocalMessage(payload: 'ping'));
+        await testActor.ask('ping');
         fail('Should have timed out');
       } catch (e) {
         expect(e, isA<TimeoutException>());

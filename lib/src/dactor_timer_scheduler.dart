@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'actor_ref.dart';
-import 'local_message.dart';
+import 'sending.dart';
 import 'timer_scheduler.dart';
 
 /// Internal timer entry to track timer state
@@ -42,7 +42,7 @@ class DactorTimerScheduler implements TimerScheduler {
 
     final timer = Timer(delay, () {
       if (!_disposed) {
-        _self.tell(LocalMessage(payload: message));
+        Sending.as(null, () => _self.tell(message));
         _timers.remove(key);
       }
     });
@@ -73,7 +73,7 @@ class DactorTimerScheduler implements TimerScheduler {
 
     final timer = Timer.periodic(interval, (_) {
       if (!_disposed && _timers.containsKey(key)) {
-        _self.tell(LocalMessage(payload: message));
+        Sending.as(null, () => _self.tell(message));
       }
     });
 
@@ -116,7 +116,7 @@ class DactorTimerScheduler implements TimerScheduler {
   void _scheduleFixedDelay(String key, dynamic message, Duration delay) {
     final timer = Timer(delay, () {
       if (!_disposed && _timers.containsKey(key)) {
-        _self.tell(LocalMessage(payload: message));
+        Sending.as(null, () => _self.tell(message));
         // Schedule the next execution after this one completes
         _scheduleFixedDelay(key, message, delay);
       }

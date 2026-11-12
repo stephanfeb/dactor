@@ -6,7 +6,7 @@ import 'package:test/test.dart';
 class _Echo extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
-    context.sender?.tell(LocalMessage(payload: message));
+    context.sender?.tell(message);
   }
 }
 
@@ -16,12 +16,15 @@ class _Ref implements ActorRef {
   @override
   bool get isAlive => true;
   @override
-  void tell(Message message, {ActorRef? sender}) {}
+  void tell(Object? message) {}
   @override
-  Future<T> ask<T>(Message message, [Duration? timeout]) =>
+  Future<T> ask<T>(Object? message, [Duration? timeout]) =>
       throw UnimplementedError();
   @override
   void watch(ActorRef watcher) {}
+
+  @override
+  void unwatch(ActorRef watcher) {}
 }
 
 TraceEvent _event(String id) => TraceEvent(id, 'sent', _Ref(), 'payload-$id');
@@ -36,7 +39,7 @@ void main() {
 
       final ref = await system.spawn('echo', () => _Echo());
       for (var i = 0; i < 1000; i++) {
-        ref.tell(LocalMessage(payload: i));
+        ref.tell(i);
       }
       await Future<void>.delayed(const Duration(milliseconds: 50));
       await system.shutdown();
@@ -48,7 +51,7 @@ void main() {
       final system = LocalActorSystem(
           ActorSystemConfig(metricsCollector: metrics, traceCollector: tracer));
       final ref = await system.spawn('echo', () => _Echo());
-      final reply = await ref.ask<dynamic>(LocalMessage(payload: 'hi'));
+      final reply = await ref.ask<dynamic>('hi');
       expect(reply, 'hi');
       expect(metrics.getCounter('messages.processed'), greaterThan(0));
       expect(tracer.eventCount, greaterThan(0));

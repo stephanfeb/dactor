@@ -1,26 +1,12 @@
 import 'package:dactor/dactor.dart';
-import 'package:dactor/src/local_actor_system.dart';
-import 'package:dactor/src/local_message.dart';
-import 'package:dactor_test/dactor_test.dart';
+import 'package:dactor/spi.dart';
+import 'support/probe.dart';
 import 'package:test/test.dart';
-import 'package:dactor/src/message.dart';
 
-class StringMessage implements Message {
+class StringMessage {
   final String message;
 
   StringMessage(this.message);
-
-  @override
-  String get correlationId => 'test';
-
-  @override
-  Map<String, dynamic> get metadata => {};
-
-  @override
-  ActorRef? get replyTo => null;
-
-  @override
-  DateTime get timestamp => DateTime.now();
 
   @override
   String toString() => message;
@@ -30,7 +16,7 @@ class TestActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (message.toString() == 'ping') {
-      context.sender?.tell(LocalMessage(payload: 'pong'));
+      context.sender?.tell('pong');
     } else if (message.toString() == 'error') {
       throw Exception('error');
     }
@@ -67,7 +53,7 @@ void main() {
       final probe = await system.createProbe();
       final actor = await system.spawn('test', () => TestActor());
 
-      actor.tell(StringMessage('ping'), sender: probe.ref);
+      sendAs(probe.ref, () => actor.tell(StringMessage('ping')));
 
       await probe.expectMsg('pong');
     });

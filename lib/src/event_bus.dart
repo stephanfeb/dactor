@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:dactor/src/actor_ref.dart';
-import 'package:dactor/src/local_message.dart';
 
 /// A message to subscribe to events of a specific type.
 class Subscribe<T> {
@@ -119,7 +118,7 @@ class EventBus {
 
     for (final subscriber in subscribers) {
       try {
-        subscriber.tell(LocalMessage(payload: event));
+        subscriber.tell(event);
       } catch (e) {
         // If delivery fails, the message will go to dead letters
         // This is handled by the actor system's dead letter queue

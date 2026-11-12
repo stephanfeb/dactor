@@ -28,7 +28,7 @@ class _Counter extends Actor {
 }
 
 class _Sup extends SupervisorActor {
-  _Sup(SupervisionStrategy strategy) : super(strategy);
+  _Sup(super.strategy);
 }
 
 /// A supervisor that implements the abstract [Supervisor] directly, without
@@ -83,7 +83,7 @@ void main() {
       await system.spawn('plain', () => _Plain());
       final evil = await system.spawn('plain/evil', () => _Thrower());
 
-      evil.tell(LocalMessage(payload: 'boom'));
+      evil.tell('boom');
       await _settle();
 
       // Treated as unsupervised: stopped, nothing escaped.
@@ -106,7 +106,7 @@ void main() {
 
       // Same naming shape as a real child, but spawned outside the supervisor.
       final impostor = await system.spawn('sup/impostor', () => _Thrower());
-      impostor.tell(LocalMessage(payload: 'boom'));
+      impostor.tell('boom');
       await _settle();
 
       expect(impostor.isAlive, isFalse, reason: 'unsupervised actors stop');
@@ -122,7 +122,7 @@ void main() {
               decider: (e, s) => SupervisionDecision.restart)));
       final child =
           await (spawned.actor as _Sup).supervise('c', () => _Counter());
-      child.tell(LocalMessage(payload: 'boom'));
+      child.tell('boom');
       await _settle();
 
       expect(child.isAlive, isTrue);
@@ -135,7 +135,7 @@ void main() {
       final bare = spawned.actor as _BareSupervisor;
       final child = await bare.supervise('c', () => _Thrower());
 
-      child.tell(LocalMessage(payload: 'boom'));
+      child.tell('boom');
       await _settle();
 
       expect(bare.failures, ['bare/c']);
@@ -152,7 +152,7 @@ void main() {
           await (spawned.actor as _Sup).supervise('c', () => _Counter());
       await system.stop(spawned.ref);
 
-      child.tell(LocalMessage(payload: 'boom'));
+      child.tell('boom');
       await _settle();
 
       expect(child.isAlive, isFalse);
@@ -199,7 +199,7 @@ void main() {
       final child = await (spawned.actor as _ThrowingSupervisor)
           .supervise('c', () => _Thrower());
 
-      child.tell(LocalMessage(payload: 'boom'));
+      child.tell('boom');
       await _settle();
 
       expect(child.isAlive, isFalse);

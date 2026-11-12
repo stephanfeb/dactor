@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:dactor/dactor.dart';
 import 'package:test/test.dart';
-import 'package:dactor/src/local_actor_system.dart';
 
 class IdleActor extends Actor {
   @override

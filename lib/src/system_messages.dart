@@ -1,42 +1,33 @@
-import 'package:dactor/dactor.dart';
-import 'package:uuid/uuid.dart';
+import 'package:dactor/src/actor_ref.dart';
+import 'package:dactor/src/exit_reason.dart';
 
-const _uuid = Uuid();
-
-class Terminated implements Message {
+/// Tells a watcher that the actor it watched has ended. Only the runtime
+/// delivers these; one told in the ordinary way is dropped.
+class Terminated {
   final ActorRef actor;
-  @override
-  final String correlationId;
-  @override
-  final DateTime timestamp;
 
-  Terminated(this.actor)
-      : correlationId = _uuid.v4(),
-        timestamp = DateTime.now();
+  /// Why the actor ended.
+  final ExitReason reason;
+
+  Terminated(this.actor, {this.reason = const NormalExit()});
 
   @override
-  Map<String, dynamic> get metadata => {};
-
-  @override
-  ActorRef? get replyTo => null;
+  String toString() => 'Terminated(${actor.id}, $reason)';
 }
 
-class DeadLetter implements Message {
-  final dynamic message;
-  final ActorRef sender;
+/// A message that could not be delivered.
+class DeadLetter {
+  /// The message, as it was told.
+  final Object? message;
+
+  /// Who told it, or null if it came from outside any actor.
+  final ActorRef? sender;
   final ActorRef recipient;
-  @override
-  final String correlationId;
-  @override
   final DateTime timestamp;
 
   DeadLetter(this.message, this.sender, this.recipient)
-      : correlationId = _uuid.v4(),
-        timestamp = DateTime.now();
+      : timestamp = DateTime.now();
 
   @override
-  Map<String, dynamic> get metadata => {};
-
-  @override
-  ActorRef? get replyTo => null;
+  String toString() => 'DeadLetter($message to ${recipient.id})';
 }
