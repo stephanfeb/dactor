@@ -49,6 +49,13 @@ abstract class ActorRef {
   /// When the target actor is terminated, a [Terminated] message is sent to the
   /// watcher.
   void watch(ActorRef watcher);
+
+  /// Stops watching: [watcher] is no longer told when this actor ends.
+  ///
+  /// Removes every watch [watcher] has on this actor. A [Terminated] sent
+  /// before this call may still be in [watcher]'s mailbox; from inside an
+  /// actor, `context.unwatch` removes that too.
+  void unwatch(ActorRef watcher);
 }
 
 /// A reference to an actor that lives outside this system, on another node.

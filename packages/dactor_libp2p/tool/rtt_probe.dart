@@ -1,7 +1,6 @@
 // Probe: the round trip of 8 bytes on one libp2p stream (UDX, Noise,
 // Yamux) on loopback, without dactor, to tell the stack's latency from the
 // transport's.
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dactor_libp2p/dactor_libp2p.dart';
@@ -31,6 +30,9 @@ Future<void> main() async {
     await s.write(ping);
     await s.read();
   }
-  print('${(watch.elapsedMicroseconds / n).toStringAsFixed(1)} us per round trip');
-  exit(0);
+  print(
+      '${(watch.elapsedMicroseconds / n).toStringAsFixed(1)} us per round trip');
+  await s.close();
+  await a.close();
+  await b.close();
 }

@@ -112,10 +112,6 @@ Future<void> client(String serverAddress, String address) async {
   await Future<void>.delayed(const Duration(milliseconds: 100));
   await node.close();
   await system.shutdown();
-  // dart_libp2p 4.12.0 leaves open the UDP socket a host without a
-  // listener dials from, which keeps the process alive. See
-  // tool/exit_probe.dart.
-  exit(0);
 }
 
 Future<void> main(List<String> args) async {

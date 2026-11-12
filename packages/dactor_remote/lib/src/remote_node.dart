@@ -38,6 +38,10 @@ final class NodeDown extends NodeEvent {
   String toString() => 'NodeDown($node)';
 }
 
+/// Handles what a node sent to a service; see [RemoteNode.serve].
+typedef ServiceHandler = void Function(
+    String from, Object? data, List<ActorRef> refs);
+
 // Frame kinds.
 const _kMessage = 0;
 const _kReply = 1;
@@ -48,6 +52,8 @@ const _kUnlink = 6;
 const _kExit = 7;
 const _kLookup = 8;
 const _kSpawn = 9;
+const _kUnwatch = 10;
+const _kService = 11;
 
 // Frame fields. Small integers keep the frames small.
 const _fKind = 0;
@@ -64,6 +70,7 @@ const _fReason = 13;
 const _fOtherCapability = 14;
 const _fName = 15;
 const _fId = 16;
+const _fRefs = 17;
 
 /// Connects an actor system to other nodes.
 ///
@@ -127,6 +134,13 @@ class RemoteNode implements TransportListener {
   /// Local watchers of remote actors: (node, path) to watchers.
   final _watching = <(String, String), Set<ActorRef>>{};
 
+  /// Local actors watched on behalf of other nodes: node to (path to the
+  /// watched actor). Dropped when that node is lost, so that a node that
+  /// goes away leaves no watchers behind.
+  final _relays = <String, Map<String, ActorRef>>{};
+
+  final _services = <String, ServiceHandler>{};
+
   /// Links between a local actor and a remote one: (node, local id, remote
   /// path).
   final _links = <(String, String, String)>{};
@@ -183,6 +197,39 @@ class RemoteNode implements TransportListener {
   /// [TimeoutException] if it does not answer.
   Future<ActorRef> lookup(String node, String name, {Duration? timeout}) =>
       _request<ActorRef>(node, {_fKind: _kLookup, _fName: name}, timeout);
+
+  /// Receives what other nodes send to [service] with [sendToService].
+  ///
+  /// This is a channel between nodes, not actors, for services built on a
+  /// node, such as `ProcessGroups` and `GlobalNames`. Unlike an actor
+  /// message, whose sender reference is whatever the sending node wrote,
+  /// the `from` a handler gets is the node the transport received the frame
+  /// from. Replaces an earlier handler for [service].
+  void serve(String service, ServiceHandler handler) =>
+      _services[service] = handler;
+
+  void stopServing(String service) => _services.remove(service);
+
+  /// Sends [data] (a plain value) and [refs] to [service] on [node]. Frames
+  /// to one node arrive in order, or not at all, like any other.
+  void sendToService(String node, String service, Object? data,
+      {List<ActorRef> refs = const []}) {
+    if (!CodecRegistry.isPlain(data)) {
+      throw ArgumentError.value(data, 'data', 'is not a plain value');
+    }
+    _send(node, {
+      _fKind: _kService,
+      _fName: service,
+      _fPayload: data,
+      _fRefs: [for (final ref in refs) _context.encodeRef(ref)],
+    });
+  }
+
+  /// How many local actors this node watches on behalf of other nodes.
+  /// A watch is dropped when its actor ends, when the other node unwatches,
+  /// and when the connection to that node is lost.
+  int get watchedForOthers =>
+      _relays.values.fold(0, (sum, relays) => sum + relays.length);
 
   /// Lets other nodes start actors of this kind here with [spawnOn].
   /// Registering a behaviour is the permission: any node that can connect
@@ -361,6 +408,15 @@ class RemoteNode implements TransportListener {
     });
   }
 
+  void _unwatch(RemoteRef target, ActorRef watcher) {
+    final key = (target.node, target.path);
+    final watchers = _watching[key];
+    if (watchers == null || !watchers.remove(watcher)) return;
+    if (watchers.isNotEmpty) return;
+    _watching.remove(key);
+    _send(target.node, {_fKind: _kUnwatch, _fPath: target.path});
+  }
+
   void _linkFrom(RemoteRef target, ActorRef local) {
     _links.add((target.node, local.id, target.path));
     _send(target.node, {
@@ -408,6 +464,14 @@ class RemoteNode implements TransportListener {
           pending.fail(NodeUnreachable(node));
         }
 
+        // Watches this node held on local actors: nobody is left to tell.
+        final relays = _relays.remove(node);
+        if (relays != null) {
+          for (final MapEntry(key: path, value: target) in relays.entries) {
+            target.unwatch(_WatchRelay(this, node, path));
+          }
+        }
+
         for (final key in _watching.keys.where((k) => k.$1 == node).toList()) {
           final ref = RemoteRef._(this, node, key.$2, null);
           for (final watcher in _watching.remove(key)!) {
@@ -450,6 +514,11 @@ class RemoteNode implements TransportListener {
         _onReply(from, frame);
       case _kWatch:
         _onWatch(from, frame);
+      case _kUnwatch:
+        // A node can only drop the watches it placed itself.
+        final path = frame[_fPath] as String;
+        final target = _relays[from]?.remove(path);
+        target?.unwatch(_WatchRelay(this, from, path));
       case _kTerminated:
         _onTerminated(from, frame);
       case _kLink:
@@ -468,6 +537,13 @@ class RemoteNode implements TransportListener {
           system.foreignExit(local, RemoteRef._(this, from, other, null),
               _decodeReason(frame[_fReason]));
         }
+      case _kService:
+        final handler = _services[frame[_fName] as String];
+        if (handler == null) return;
+        final refs = [
+          for (final ref in frame[_fRefs] as List) _context.decodeRef(ref)
+        ];
+        handler(from, frame[_fPayload], refs);
       case _kLookup:
         _onLookup(from, frame);
       case _kSpawn:
@@ -549,6 +625,10 @@ class RemoteNode implements TransportListener {
       });
       return;
     }
+    final relays = _relays.putIfAbsent(from, () => {});
+    // One watch per node and actor; the node counts its own watchers.
+    if (relays.containsKey(path)) return;
+    relays[path] = target;
     target.watch(_WatchRelay(this, from, path));
   }
 
@@ -743,6 +823,9 @@ final class RemoteRef implements ForeignActorRef {
   void watch(ActorRef watcher) => _node._watch(this, watcher);
 
   @override
+  void unwatch(ActorRef watcher) => _node._unwatch(this, watcher);
+
+  @override
   void linkFrom(ActorRef local) => _node._linkFrom(this, local);
 
   @override
@@ -793,6 +876,9 @@ class _ReplyRef implements ActorRef {
   @override
   void watch(ActorRef watcher) =>
       throw UnsupportedError('Cannot watch the sender of an ask');
+
+  @override
+  void unwatch(ActorRef watcher) {}
 }
 
 /// Registered as a watcher of a local actor on behalf of another node.
@@ -812,6 +898,7 @@ class _WatchRelay implements ActorRef {
   void tell(Message message, {ActorRef? sender}) {
     final payload = message is LocalMessage ? message.payload : message;
     if (payload is! Terminated) return;
+    _node._relays[_to]?.remove(_watched);
     _node._send(_to, {
       _fKind: _kTerminated,
       _fPath: _watched,
@@ -825,6 +912,21 @@ class _WatchRelay implements ActorRef {
 
   @override
   void watch(ActorRef watcher) => throw UnsupportedError('Not an actor');
+
+  @override
+  void unwatch(ActorRef watcher) {}
+
+  /// Equal for the same node and actor, so that [ActorRef.unwatch] finds
+  /// the relay registered by an earlier frame.
+  @override
+  bool operator ==(Object other) =>
+      other is _WatchRelay &&
+      identical(other._node, _node) &&
+      other._to == _to &&
+      other._watched == _watched;
+
+  @override
+  int get hashCode => Object.hash(_to, _watched);
 }
 
 /// A local reference that came back from the wire after its actor ended.
@@ -846,6 +948,9 @@ class _Gone implements ActorRef {
   @override
   void watch(ActorRef watcher) => watcher.tell(
       LocalMessage(payload: Terminated(this, reason: const NoProcExit())));
+
+  @override
+  void unwatch(ActorRef watcher) {}
 }
 
 Object? _encodeReason(ExitReason reason) => switch (reason) {

@@ -28,6 +28,17 @@ class InMemoryNetwork {
   final _cut = <(String, String)>{};
   final _connected = <(String, String)>{};
 
+  /// Pairs whose connection was cut and is not yet reported lost. Nothing
+  /// passes between them until it is, even if the path heals first:
+  /// otherwise frames sent after a heal would arrive after frames lost in
+  /// the cut, with no word of the loss.
+  final _broken = <(String, String)>{};
+
+  /// Senders whose frames to a node were dropped because it could not be
+  /// reached, until that is reported to them; their further frames to it
+  /// are dropped too, for the same reason.
+  final _failing = <(String, String)>{};
+
   /// With [random] from `Simulation.random`, jitter is replayed with the
   /// seed.
   InMemoryNetwork({
@@ -56,7 +67,7 @@ class InMemoryNetwork {
     if (!_cut.add(pair)) return;
     _nodes[a]?._flight[b]?.clear();
     _nodes[b]?._flight[a]?.clear();
-    if (_connected.contains(pair)) {
+    if (_connected.contains(pair) && _broken.add(pair)) {
       Timer(detectAfter, () => _disconnect(a, b));
     }
   }
@@ -78,6 +89,7 @@ class InMemoryNetwork {
   bool isPartitioned(String a, String b) => _cut.contains(_pair(a, b));
 
   void _disconnect(String a, String b) {
+    _broken.remove(_pair(a, b));
     if (!_connected.remove(_pair(a, b))) return;
     _nodes[a]?._flight[b]?.clear();
     _nodes[b]?._flight[a]?.clear();
@@ -88,14 +100,17 @@ class InMemoryNetwork {
   void _send(_MemoryTransport from, String to, Uint8List frame) {
     final target = _nodes[to];
     final pair = _pair(from.localNode, to);
+    final direction = (from.localNode, to);
+    // A cut connection passes nothing until its loss is reported.
+    if (_broken.contains(pair) || _failing.contains(direction)) return;
     if (target == null || target._closed || _cut.contains(pair)) {
       // Unreachable. A connection that was thought to be up is torn down by
-      // the partition's own timer; a fresh attempt fails by itself.
-      if (!_connected.contains(pair)) {
+      // the partition's own timer; a fresh attempt fails by itself, and
+      // until the sender is told, nothing more goes that way.
+      if (!_connected.contains(pair) && _failing.add(direction)) {
         Timer(detectAfter, () {
-          if (!from._closed && !_connected.contains(pair)) {
-            from._listener?.onNodeDown(to);
-          }
+          _failing.remove(direction);
+          if (!from._closed) from._listener?.onNodeDown(to);
         });
       }
       return;

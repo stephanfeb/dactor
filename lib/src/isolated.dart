@@ -531,4 +531,7 @@ class _HomeRef implements ActorRef {
   @override
   void watch(ActorRef watcher) => throw UnsupportedError(
       'An actor inside an isolate cannot watch an actor of the home system');
+
+  @override
+  void unwatch(ActorRef watcher) {}
 }

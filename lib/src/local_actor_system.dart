@@ -17,6 +17,7 @@ import 'package:dactor/src/logging/logging.dart';
 import 'package:dactor/src/ask_config.dart';
 import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor/src/supervision.dart';
+import 'package:dactor/src/system_messages.dart';
 import 'package:dactor/src/sys.dart';
 import 'package:dactor/src/routing/pool.dart';
 import 'package:dactor/src/routing/router_actor.dart';
@@ -950,6 +951,18 @@ class LocalActorSystem implements ActorSystem {
     }
   }
 
+  /// Drops every [Terminated] from [watched] waiting in [watcher]'s mailbox.
+  void _flushTerminated(ActorRef watcher, ActorRef watched) {
+    final mailbox = _actorInfo[watcher.id]?.mailbox;
+    if (mailbox == null) return;
+    bool isFrom(Message message) {
+      final payload = message is LocalMessage ? message.payload : message;
+      return payload is Terminated && payload.actor == watched;
+    }
+
+    while (mailbox.takeFirstWhere(isFrom) != null) {}
+  }
+
   /// Gives a handler waiting in `receive` the first queued message it
   /// accepts. Returns whether it got one.
   bool _feedReceive(_ActorInfo info) {
@@ -1536,6 +1549,12 @@ class _ActorContext implements ActorContext, BehaviourContext {
   @override
   void watch(ActorRef actor) {
     actor.watch(self);
+  }
+
+  @override
+  void unwatch(ActorRef actor) {
+    actor.unwatch(self);
+    system._flushTerminated(self, actor);
   }
 
   @override

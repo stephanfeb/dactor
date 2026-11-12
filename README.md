@@ -355,6 +355,7 @@ class Session extends Actor {
 - An actor that sets `context.trapExits = true` in `preStart` is not brought down. It receives an `ExitSignal(from, reason)` message instead, for normal exits too.
 - A restart ends the old incarnation, so linked actors are signalled and the link is gone. Link in `preStart` if the pairing should survive restarts.
 - Linking to an actor that is already dead signals `NoProcExit` straight away.
+- `context.unwatch(actor)` ends a watch and drops a `Terminated` from that actor still waiting in the mailbox, so none arrives after it (Erlang's `demonitor` with `flush`). `actor.unwatch(watcher)` on the ref removes the watch but not a notice already queued.
 
 Both `ExitSignal` and `Terminated` carry an `ExitReason`:
 
@@ -1376,6 +1377,7 @@ Limits:
 - Nothing outside the isolate completes inside a simulation: no sockets, files or other isolates. Waiting for one ends the run with `SimulationDeadlock`.
 - Continuations of one handler run in the order Dart runs them. The scheduler reorders deliveries and timers, not microtasks.
 - The simulation needs the real `LocalActorSystem`; it does not combine with `TestActorSystem`.
+- Futures made outside the simulation's zone never complete inside it. The one that is easy to miss is `StreamSubscription.cancel()` on a stream created before the run, or whose controller lives outside it: awaiting it hangs the run until it ends with `SimulationLimitExceeded`. Cancel without awaiting.
 
 ### Tracing Message Flow
 

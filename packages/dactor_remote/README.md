@@ -33,7 +33,7 @@ print(await store.call(Fetch('language')));
 | `isAlive` | Whether the actor is alive | Whether this node is open. Watch the actor to learn of its end. |
 | Reaching an actor | Anyone with its id | Only with a reference that carries a capability token |
 
-A watch or link is over once it has fired. After a partition heals, the same references work again; watch or link again if you still care.
+`unwatch` works across nodes. When a node is lost, the watches it had placed on this node's actors are dropped. A watch or link is over once it has fired. After a partition heals, the same references work again; watch or link again if you still care.
 
 ## Codecs
 
@@ -87,10 +87,39 @@ final counter = await node.spawnOn('<node>', 'counter', 'c1', args: 40);
 
 Closures cannot travel, so the behaviour is named and its arguments encoded. Registering a behaviour is the permission: any node that can connect can spawn it.
 
+## Process groups
+
+```dart
+final groups = ProcessGroups(node);   // one per node and scope
+groups.connect('<other node>');       // the rest of the scope is found through it
+groups.join('workers', worker);       // a local actor
+final all = groups.members('workers'); // local and remote, as refs
+groups.changes.listen((c) => ...);     // GroupChange(group, joined:, left:)
+```
+
+After Erlang's `pg`. Each node is the only one that changes its own members; it tells the others when it joins or leaves, and sends all of them to a node it meets. A member that ends leaves by itself. When a node is lost, its members disappear from the others' view, and come back when it is reachable again (retried every `retry`). Nodes pass on the nodes they know, so connecting to one node of a scope is enough. A node accepts only members that are actors of the node that sends them; `accept:` keeps other nodes out of the scope. A group is eventually consistent: during a partition, each side sees its own side.
+
+## Global names
+
+```dart
+final names = GlobalNames(node);
+names.connect('<other node>');
+if (names.register('leader', me)) { ... }
+final leader = names.whereis('leader');
+```
+
+After Erlang's `global`, built on process groups: a name is a group with one member. `register` refuses a name any node is known to hold. Two nodes can still take the same name while they cannot see each other (within a message's travel time, or across a partition). When they meet, every node picks the same winner, the holder on the node whose name sorts first; the loser's node unregisters it and sends the losing actor a `NameConflict`. Names are unique once the network is quiet, not at every moment. A name is released when its actor ends.
+
+`test/simulated_groups_test.dart` runs 300 seeded histories each of joins, leaves, deaths, registrations, partitions and heals on four nodes, and checks that every node ends up agreeing with the truth.
+
+## Services
+
+`node.serve(name, handler)` and `node.sendToService(node, name, data, refs:)` exchange messages between nodes rather than actors. The handler learns which node sent each message, as the transport authenticated it. Groups and names are built on this, because the sender of an actor message is not authenticated.
+
 ## Cost
 
 Loopback TCP, both nodes in one process (`tool/throughput.dart`): about 89k one-way messages per second against about 630k locally, and about 70 µs per ask against 4 µs.
 
 ## Not here yet
 
-Node heartbeats in this package (a silent, still-open connection is not detected over TCP; over libp2p the muxer's keep-alive detects it); cluster membership; a registry of names or process groups across nodes; end-to-end encryption; generated codecs; `unwatch`.
+Node heartbeats in this package (a silent, still-open connection is not detected over TCP; over libp2p the muxer's keep-alive detects it); cluster membership beyond the nodes of a group scope; end-to-end encryption; generated codecs.

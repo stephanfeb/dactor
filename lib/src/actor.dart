@@ -36,6 +36,11 @@ abstract class ActorContext {
   /// Watches an actor for termination.
   void watch(ActorRef actor);
 
+  /// Stops watching [actor], and drops any [Terminated] from it already
+  /// waiting in this actor's mailbox, so that none is handled after this
+  /// call (Erlang's `demonitor` with `flush`).
+  void unwatch(ActorRef actor);
+
   /// Links this actor with [other], in both directions.
   ///
   /// When either one ends, the other is told. An actor that traps exits (see

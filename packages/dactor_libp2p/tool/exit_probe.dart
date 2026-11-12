@@ -1,12 +1,13 @@
 // Probe: does a process exit after its libp2p host dialled another and
-// both were closed? With dart_libp2p 4.12.0 it does not when the dialler
-// has no listener, or when a stream was opened: a dial that does not reuse
-// a listener's socket binds a UDP socket of its own (UDXTransport
-// _performDial), and nothing closes it after a successful dial.
+// both were closed? With dart_libp2p 4.12.0 it did not when the dialler had
+// no listener, or when a stream was opened: a dial that did not reuse a
+// listener's socket bound a UDP socket of its own (UDXTransport
+// _performDial), and nothing closed it after a successful dial. Fixed in
+// 4.12.1; every variant below exits.
 //
-//   dart run tool/exit_probe.dart                    hangs
-//   dart run tool/exit_probe.dart blisten            exits
-//   dart run tool/exit_probe.dart blisten stream     hangs
+//   dart run tool/exit_probe.dart
+//   dart run tool/exit_probe.dart blisten
+//   dart run tool/exit_probe.dart blisten stream [close|reset]
 import 'dart:typed_data';
 
 import 'package:dactor_libp2p/dactor_libp2p.dart';

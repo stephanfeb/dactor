@@ -111,6 +111,9 @@ class Agent extends Actor {
       case ('watch', String who):
         context.watch(known[who]!);
         context.sender?.tell(LocalMessage(payload: 'watching'));
+      case ('unwatch', String who):
+        context.unwatch(known[who]!);
+        context.sender?.tell(LocalMessage(payload: 'unwatched'));
       case ('link', String who):
         context.link(known[who]!);
         context.sender?.tell(LocalMessage(payload: 'linked'));

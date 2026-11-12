@@ -240,6 +240,30 @@ Phase 5, third part: through real NATs.
   go-ricochet's mailbox Docker setup). Relay, hole punch and lost-node
   checks; cone and symmetric NATs.
 
+Phase 5, fourth part: hardening, process groups and global names.
+
+- Added `ActorRef.unwatch(watcher)` and `ActorContext.unwatch(actor)`. The
+  context form also drops a `Terminated` from that actor still in the
+  mailbox. Works on remote refs.
+- Fixed: a watcher that unwatched while being told of a stop could crash
+  `stop()` with a concurrent modification.
+- `RemoteNode` drops the watches a lost node had placed on its actors,
+  instead of keeping them until the actors end. New `watchedForOthers`.
+- New `ProcessGroups` (after Erlang's `pg`) and `GlobalNames` (after
+  `global`) in `dactor_remote`. Seeded simulation of 300 histories each.
+- New `RemoteNode.serve` and `sendToService`: messages between nodes, with
+  the sending node authenticated by the transport.
+- `InMemoryNetwork` fixed: a frame lost to a partition could be followed by
+  later frames on the same pair with no node-down in between, if the
+  partition healed before the loss was noticed. That broke the transport's
+  promise ("in order, or nothing, and then a node-down"). Now nothing passes
+  between two nodes from the loss until it is reported.
+- `dactor_libp2p` requires dart_libp2p 4.12.1, which fixes the socket leak
+  that kept processes from exiting. The examples and tools no longer call
+  `exit`.
+- TCP heartbeats are still not done: a silent, still-open TCP connection is
+  not detected (libp2p's keep-alive does detect it).
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

@@ -3,7 +3,6 @@
 // one-way tells per second and time per ask.
 //
 // Run:  dart run tool/throughput.dart
-import 'dart:io';
 
 import 'package:dactor/dactor.dart';
 import 'package:dactor_libp2p/dactor_libp2p.dart';
@@ -75,5 +74,4 @@ Future<void> main() async {
   for (final system in [sa, sb, sc, sd]) {
     await system.shutdown();
   }
-  exit(0); // See tool/exit_probe.dart.
 }

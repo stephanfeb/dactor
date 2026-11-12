@@ -199,11 +199,17 @@ class LocalActorRef implements ActorRef {
     _watchers.add(watcher);
   }
 
+  @override
+  void unwatch(ActorRef watcher) => _watchers.removeWhere((w) => w == watcher);
+
   void stop([ExitReason reason = const NormalExit()]) {
     if (!_isAlive) return;
     _isAlive = false;
     _mailbox.dispose();
-    for (final watcher in _watchers) {
+    // Taken first: a watcher may unwatch while it is being told.
+    final watchers = [..._watchers];
+    _watchers.clear();
+    for (final watcher in watchers) {
       watcher.tell(LocalMessage(payload: Terminated(this, reason: reason)));
     }
   }
@@ -255,6 +261,9 @@ class _TemporaryActorRef<T> implements ActorRef {
   void watch(ActorRef watcher) {
     throw UnsupportedError('Cannot watch a temporary actor reference.');
   }
+
+  @override
+  void unwatch(ActorRef watcher) {}
 
   void stop() {
     if (isAlive) {

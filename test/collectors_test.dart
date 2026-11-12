@@ -22,6 +22,9 @@ class _Ref implements ActorRef {
       throw UnimplementedError();
   @override
   void watch(ActorRef watcher) {}
+
+  @override
+  void unwatch(ActorRef watcher) {}
 }
 
 TraceEvent _event(String id) => TraceEvent(id, 'sent', _Ref(), 'payload-$id');

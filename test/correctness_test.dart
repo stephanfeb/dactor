@@ -229,4 +229,7 @@ class _FakeActorRef implements ActorRef {
 
   @override
   void watch(ActorRef watcher) {}
+
+  @override
+  void unwatch(ActorRef watcher) {}
 }

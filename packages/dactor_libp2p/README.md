@@ -84,16 +84,16 @@ Measured on loopback with all nodes in one process (`tool/throughput.dart`):
 
 | | One-way messages per second | Time per ask |
 |---|---|---|
-| Local | ~416k | ~4.5 µs |
-| TCP | ~103k | ~58 µs |
-| libp2p (UDX, Noise, Yamux) | ~78k | ~900 µs |
+| Local | ~420k–620k | ~3.5–4.5 µs |
+| TCP | ~100k–125k | ~57 µs |
+| libp2p (UDX, Noise, Yamux) | ~78k–100k | ~880–900 µs |
 
-Most of the ask latency belongs to the stack. A raw 8-byte round trip on one libp2p stream takes about 620 µs (`tool/rtt_probe.dart`).
+Most of the ask latency belongs to the stack. A raw 8-byte round trip on one libp2p stream takes about 600–620 µs (`tool/rtt_probe.dart`).
 
-## Known problems in dart_libp2p 4.12.0
+## Known problems in dart_libp2p
 
-- **A process may not exit after its hosts are closed.** A dial that does not reuse a listener's socket binds a UDP socket of its own (`UDXTransport._performDial`). Nothing closes it after a successful dial. This affects hosts without a listener and ephemeral dials such as DCUtR's direct attempt. Each such dial leaks one socket for the life of the process. `tool/exit_probe.dart` reproduces it, and the example calls `exit(0)` because of it.
 - `AddrInfo.fromMultiaddr` takes the first `/p2p/` component of an address, which for a relay address is the relay. `Libp2pTransport.addAddress` parses addresses itself.
+- Fixed in 4.12.1, which this package requires: a dial that did not reuse a listener's socket leaked its UDP socket, so a process could not exit after closing its hosts. `tool/exit_probe.dart` was the reproduction.
 
 ## Not here yet
 
