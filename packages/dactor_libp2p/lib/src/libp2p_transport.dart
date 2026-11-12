@@ -17,9 +17,12 @@ import 'package:dart_libp2p/dart_libp2p.dart';
 /// `/dactor/remote/1.0.0` protocol to it. It does not close the host unless
 /// told to.
 ///
-/// To reach a node, libp2p needs an address for it: call [addAddresses]
-/// with one, or connect the hosts some other way first (a DHT, mDNS, an
-/// earlier connection in the other direction). A node behind a NAT is
+/// To reach a node, libp2p needs an address for it. The transport is an
+/// [AddressBook], so `RemoteNode` passes addresses along with references
+/// and process groups pass them between the nodes of a scope: a node that
+/// was handed a reference can usually dial its node. Otherwise, call
+/// [addAddresses], give a [resolve] function (a DHT lookup, for example),
+/// or connect the hosts some other way first. A node behind a NAT is
 /// reached through a relay address, `<relay address>/p2p-circuit/p2p/<id>`.
 ///
 /// Each direction between two nodes is a libp2p stream of its own: a node
@@ -34,7 +37,7 @@ import 'package:dart_libp2p/dart_libp2p.dart';
 /// old stream with a marker (an empty frame), and the receiving side reads
 /// a node's newer stream only after the older one has ended with it, so
 /// frames keep their order and the node is not reported down.
-class Libp2pTransport implements Transport {
+class Libp2pTransport implements Transport, AddressBook {
   /// The protocol id the transport registers on the host.
   static const protocol = '/dactor/remote/1.0.0';
 
@@ -51,6 +54,25 @@ class Libp2pTransport implements Transport {
 
   final bool _ownsHost;
 
+  /// Asked for a node's addresses before dialling it, when none are known.
+  /// Returns addresses ending in `/p2p/<id>`; an empty list when it finds
+  /// none.
+  final Future<List<String>> Function(String node)? resolve;
+
+  /// Which of this node's addresses [localAddresses] passes on to others.
+  /// By default, those this node could dial itself: a relay reachable over
+  /// TCP is left out when the host has only UDX, for example, on the
+  /// assumption that the other nodes run the same transports.
+  final bool Function(String address)? advertise;
+
+  // Addresses known per node, each ending in /p2p/<node>: those added or
+  // learned, and those a node listed when identified.
+  final _addressesOf = <String, List<String>>{};
+  // Addresses being written to the peer store, by node; a dial waits for
+  // them.
+  final _storing = <String, Future<void>>{};
+  Subscription? _identified;
+
   @override
   final String localNode;
 
@@ -64,10 +86,24 @@ class Libp2pTransport implements Transport {
   /// Adds the dactor protocol to [host], which should be started. With
   /// [closeHost], [close] closes the host as well.
   Libp2pTransport(this.host,
-      {this.dialTimeout = const Duration(seconds: 15), bool closeHost = false})
+      {this.dialTimeout = const Duration(seconds: 15),
+      bool closeHost = false,
+      this.resolve,
+      this.advertise})
       : _ownsHost = closeHost,
         localNode = host.id.toBase58() {
     host.setStreamHandler(protocol, _accept);
+    _identified = host.eventBus.subscribe(EvtPeerIdentificationCompleted);
+    _identified!.stream.listen((event) {
+      if (event
+          case EvtPeerIdentificationCompleted(
+            :final peer,
+            :final listenAddrs
+          )) {
+        final node = peer.toBase58();
+        _remember(node, [for (final a in listenAddrs) _withPeer('$a', node)]);
+      }
+    });
     _notifiee = NotifyBundle(connectedF: (network, conn, {dialLatency}) {
       if (!_isRelayed(conn)) {
         final node = conn.remotePeer.toBase58();
@@ -93,6 +129,71 @@ class Libp2pTransport implements Transport {
               : '$addr/p2p/$localNode'
       ];
 
+  @override
+  List<String> get localAddresses => [
+        for (final address in addresses)
+          if (advertise?.call(address) ?? _canDial(address)) address
+      ];
+
+  /// Whether this host could dial [address], or for a relay address, the
+  /// relay in it.
+  bool _canDial(String address) {
+    try {
+      final circuit = address.indexOf('/p2p-circuit');
+      final target = circuit < 0 ? address : address.substring(0, circuit);
+      final at = target.lastIndexOf('/p2p/');
+      if (at < 0) return false;
+      return host.network.canDial(PeerId.fromString(target.substring(at + 5)),
+          MultiAddr(target.substring(0, at)));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  List<String> addressesOf(String node) => _addressesOf[node] ?? const [];
+
+  @override
+  void learn(String node, List<String> addresses) {
+    final usable = [
+      for (final a in addresses)
+        if (a.endsWith('/p2p/$node')) a
+    ];
+    if (usable.isEmpty || node == localNode) return;
+    _store(node, usable);
+  }
+
+  void _store(String node, List<String> addresses) {
+    _remember(node, addresses);
+    final before = _storing[node] ?? Future<void>.value();
+    late final Future<void> done;
+    done = before.then((_) async {
+      for (final a in addresses) {
+        try {
+          await addAddress(a);
+        } catch (_) {
+          // Not an address libp2p can parse; dialling will do without it.
+        }
+      }
+    }).whenComplete(() {
+      if (identical(_storing[node], done)) _storing.remove(node);
+    });
+    _storing[node] = done;
+  }
+
+  /// Keeps [addresses] first among those known for [node], at most
+  /// [RemoteNode.maxAddresses] of them.
+  void _remember(String node, List<String> addresses) {
+    if (node == localNode || addresses.isEmpty) return;
+    final known = _addressesOf[node] ?? const [];
+    _addressesOf[node] = {...addresses, ...known}
+        .take(RemoteNode.maxAddresses)
+        .toList(growable: false);
+  }
+
+  static String _withPeer(String address, String node) =>
+      address.endsWith('/p2p/$node') ? address : '$address/p2p/$node';
+
   /// Tells libp2p where [addresses] reach. Each must end in `/p2p/<id>`,
   /// as [addresses] gives them; the node is the one named there. A relay
   /// address teaches the relay's own address too, which libp2p needs to
@@ -117,6 +218,7 @@ class Libp2pTransport implements Transport {
       addr = MultiAddr(address.substring(0, at));
     }
     await host.peerStore.addrBook.addAddrs(peer, [addr], ttl);
+    _remember(id, [address]);
     return id;
   }
 
@@ -177,8 +279,10 @@ class Libp2pTransport implements Transport {
       scheduleMicrotask(() => _down(node));
       return out;
     }
-    host.newStream(peer, const [protocol], Context()).timeout(dialTimeout).then(
-        (stream) {
+    _dialable(node, peer)
+        .then((_) => host.newStream(peer, const [protocol], Context()))
+        .timeout(dialTimeout)
+        .then((stream) {
       if (_closed || !identical(_outbound[node], out)) {
         unawaited(stream.reset().catchError((_) {}));
         return;
@@ -194,15 +298,49 @@ class Libp2pTransport implements Transport {
     return out;
   }
 
+  /// Waits for addresses of [node] still being stored, and asks [resolve]
+  /// when there are none at all and no connection either.
+  Future<void> _dialable(String node, PeerId peer) async {
+    await _storing[node];
+    final resolve = this.resolve;
+    if (resolve == null ||
+        host.network.connectedness(peer) == Connectedness.connected ||
+        (await host.peerStore.addrBook.addrs(peer)).isNotEmpty) {
+      return;
+    }
+    learn(node, await resolve(node));
+    await _storing[node];
+  }
+
   Future<void> _drain(P2PStream stream, String node) async {
     try {
       while (!_closed) {
-        final chunk = await stream.read();
+        final chunk = await _read(stream);
         if (chunk.isEmpty) break;
       }
     } catch (_) {}
     if (identical(_outbound[node]?.stream, stream)) _down(node);
   }
+
+  /// Reads from [stream], waiting for as long as the stream lasts.
+  ///
+  /// Without a deadline, a Yamux read gives up after five minutes without
+  /// data and throws, though the stream is fine: a node that sent nothing
+  /// for five minutes would be taken for down. Whether the connection
+  /// still works is the keep-alive's to find out, which then ends the
+  /// stream. The deadline is set before every read: libp2p clears it on an
+  /// accepted stream once protocol negotiation is done, which can be after
+  /// the handler has started.
+  static Future<dynamic> _read(P2PStream stream) async {
+    try {
+      await stream.setReadDeadline(_noDeadline);
+    } catch (_) {
+      // A stream without deadlines has no five-minute limit either.
+    }
+    return stream.read();
+  }
+
+  static final _noDeadline = DateTime.utc(9999);
 
   Future<void> _accept(P2PStream stream, PeerId remotePeer) async {
     if (_closed) {
@@ -224,7 +362,7 @@ class Libp2pTransport implements Transport {
     try {
       read:
       while (!_closed) {
-        final chunk = await stream.read();
+        final chunk = await _read(stream);
         if (chunk.isEmpty) break;
         for (final frame in reader.add(chunk)) {
           if (_closed || !(_inbound[node]?.contains(entry) ?? false)) return;
@@ -281,6 +419,7 @@ class Libp2pTransport implements Transport {
     _listener = null;
     host.removeStreamHandler(protocol);
     host.network.stopNotify(_notifiee);
+    unawaited(_identified?.close().catchError((_) {}));
     final streams = [
       for (final out in _outbound.values) ...[
         if (out.stream != null) out.stream!,

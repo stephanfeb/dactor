@@ -31,10 +31,16 @@ final class GroupChange {
 ///
 /// - A member that ends leaves all its groups.
 /// - Nodes of the scope tell each other which other nodes they know, and
-///   connect to those too, so that the scope becomes a full mesh. The
-///   transport must be able to reach a node by its name (with libp2p, it
-///   must know an address for it).
+///   connect to those too, so that the scope becomes a full mesh. On a
+///   transport that is an [AddressBook] (libp2p), they also pass on the
+///   addresses they know for those nodes, so a node needs an address for
+///   one node of the scope only.
 /// - Nodes that are known but not connected are retried every [retry].
+///   One that another node passed on is forgotten once it has not been
+///   reached for [forgetAfter], and is no longer passed on once a retry
+///   has missed it: a node that is gone for good leaves the scope instead
+///   of being retried, and spread, for ever. Nodes given to [connect] are
+///   retried for as long as this runs.
 /// - Members are passed with their capability tokens: joining a group lets
 ///   every node of the scope send to that actor. Use [accept] to choose
 ///   which nodes may take part.
@@ -48,6 +54,11 @@ class ProcessGroups {
   /// How often nodes that are known but not connected are tried again.
   final Duration retry;
 
+  /// How long a node that another node passed on can stay unreachable
+  /// before this node forgets it. Counted in retries, so time this node
+  /// spends suspended (an app in the background) does not count.
+  final Duration forgetAfter;
+
   /// Which nodes may take part. Others are ignored.
   final bool Function(String node) accept;
 
@@ -55,6 +66,10 @@ class ProcessGroups {
   final _remote = <String, Map<String, Set<ActorRef>>>{};
   final _known = <String>{};
   final _synced = <String>{};
+  // Given to [connect]: never forgotten.
+  final _pinned = <String>{};
+  // Retries in a row that found a known node unreached.
+  final _misses = <String, int>{};
   // Not synchronous: a listener may join or leave in response, which adds
   // an event of its own.
   final _changes = StreamController<GroupChange>.broadcast();
@@ -66,6 +81,7 @@ class ProcessGroups {
   ProcessGroups(this.node,
       {this.scope = 'default',
       this.retry = const Duration(seconds: 5),
+      this.forgetAfter = const Duration(minutes: 10),
       bool Function(String node)? accept})
       : accept = accept ?? _anyNode {
     node.serve(_service, _onFrame);
@@ -77,11 +93,7 @@ class ProcessGroups {
           _lost(peer);
       }
     });
-    _timer = Timer.periodic(retry, (_) {
-      for (final peer in _known.difference(_synced).toList()) {
-        _sync(peer);
-      }
-    });
+    _timer = Timer.periodic(retry, (_) => _retry());
   }
 
   static bool _anyNode(String node) => true;
@@ -100,6 +112,7 @@ class ProcessGroups {
   void connect(String peer) {
     if (_closed || peer == node.id || !accept(peer)) return;
     _known.add(peer);
+    _pinned.add(peer);
     if (!_synced.contains(peer)) _sync(peer);
   }
 
@@ -177,7 +190,15 @@ class ProcessGroups {
       [
         for (final e in groups) [e.key, e.value.length]
       ],
-      [..._known.where((n) => n != peer)],
+      // The other nodes this one knows, with how to reach them, so that
+      // the scope becomes a mesh even where a node had no address for the
+      // others.
+      // Not those a retry has missed: a node gone for good would spread.
+      [
+        for (final n in _known)
+          if (n != peer && !_misses.containsKey(n))
+            [n, node.addressesOf(n).take(RemoteNode.maxAddresses).toList()]
+      ],
       // Whether this node lacks [peer]'s memberships and needs them sent
       // back, even if [peer] thinks it sent them already: one side can
       // notice a lost connection that the other did not.
@@ -204,6 +225,7 @@ class ProcessGroups {
     switch (data) {
       case ['sync', List groups, List others, bool wantsReply]:
         _known.add(from);
+        _misses.remove(from);
         final fresh = <String, Set<ActorRef>>{};
         var at = 0;
         for (final [String group, int count] in groups.cast<List>()) {
@@ -213,9 +235,11 @@ class ProcessGroups {
         }
         _replace(from, fresh);
         if (wantsReply || !_synced.contains(from)) _sync(from);
-        for (final other in others.cast<String>()) {
-          if (other != node.id && accept(other) && _known.add(other)) {
-            _sync(other);
+        for (final entry in others) {
+          if (entry case [String other, List addresses]
+              when other != node.id && accept(other)) {
+            node.learnAddresses(other, addresses);
+            if (_known.add(other)) _sync(other);
           }
         }
       case ['join', String group]:
@@ -251,6 +275,22 @@ class ProcessGroups {
       if (joined.isNotEmpty || left.isNotEmpty) {
         _changes.add(GroupChange(group, joined: joined, left: left));
       }
+    }
+  }
+
+  /// Tries again the known nodes that are not connected, and forgets
+  /// those that were passed on and have been unreachable too long.
+  void _retry() {
+    final limit = forgetAfter.inMicroseconds / retry.inMicroseconds;
+    for (final peer in _known.toList()) {
+      if (_remote.containsKey(peer)) continue;
+      final misses = _misses[peer] = (_misses[peer] ?? 0) + 1;
+      if (!_pinned.contains(peer) && misses >= limit) {
+        _known.remove(peer);
+        _misses.remove(peer);
+        continue;
+      }
+      if (!_synced.contains(peer)) _sync(peer);
     }
   }
 

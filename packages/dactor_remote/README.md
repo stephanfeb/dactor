@@ -97,7 +97,7 @@ final all = groups.members('workers'); // local and remote, as refs
 groups.changes.listen((c) => ...);     // GroupChange(group, joined:, left:)
 ```
 
-After Erlang's `pg`. Each node is the only one that changes its own members; it tells the others when it joins or leaves, and sends all of them to a node it meets. A member that ends leaves by itself. When a node is lost, its members disappear from the others' view, and come back when it is reachable again (retried every `retry`). Nodes pass on the nodes they know, so connecting to one node of a scope is enough. A node accepts only members that are actors of the node that sends them; `accept:` keeps other nodes out of the scope. A group is eventually consistent: during a partition, each side sees its own side.
+After Erlang's `pg`. Each node is the only one that changes its own members; it tells the others when it joins or leaves, and sends all of them to a node it meets. A member that ends leaves by itself. When a node is lost, its members disappear from the others' view, and come back when it is reachable again (retried every `retry`). Nodes pass on the nodes they know, so connecting to one node of a scope is enough. A node that was passed on and stays unreachable for `forgetAfter` (10 minutes by default, counted in retries, so time spent suspended does not count) is forgotten, and one that a retry has missed is no longer passed on: a node gone for good leaves the scope instead of being retried and spread for ever. Nodes given to `connect` are never forgotten. A node accepts only members that are actors of the node that sends them; `accept:` keeps other nodes out of the scope. A group is eventually consistent: during a partition, each side sees its own side.
 
 ## Global names
 
@@ -112,6 +112,14 @@ After Erlang's `global`, built on process groups: a name is a group with one mem
 
 `test/simulated_groups_test.dart` runs 300 seeded histories each of joins, leaves, deaths, registrations, partitions and heals on four nodes, and checks that every node ends up agreeing with the truth.
 
+## Discovery
+
+A reference brings with it how to reach its node. On a transport that is an `AddressBook` (libp2p is; the in-memory network and TCP need none), a reference sent in a message carries up to eight addresses of the actor's node, and `uriOf` adds them to the text as `addr` parameters. The node that receives it can dial that node without having been told anything else about it. Process groups pass on the addresses of the nodes they know, so a node needs an address for one node of a scope only.
+
+`node.addresses`, `node.addressesOf(peer)` and `node.learnAddresses(peer, addresses)` give access to the same thing. The sender of a message carries no addresses: the receiver is already talking to its node.
+
+A wrong address costs a failed dial. It cannot make another node answer in a node's name, as long as the transport authenticates nodes (libp2p does).
+
 ## Services
 
 `node.serve(name, handler)` and `node.sendToService(node, name, data, refs:)` exchange messages between nodes rather than actors. The handler learns which node sent each message, as the transport authenticated it. Groups and names are built on this, because the sender of an actor message is not authenticated.
@@ -122,4 +130,4 @@ Loopback TCP, both nodes in one process (`tool/throughput.dart`): about 89k one-
 
 ## Not here yet
 
-Node heartbeats in this package (a silent, still-open connection is not detected over TCP; over libp2p the muxer's keep-alive detects it); cluster membership beyond the nodes of a group scope; end-to-end encryption; generated codecs.
+Node heartbeats in this package (a silent, still-open connection is not detected over TCP; over libp2p the muxer's keep-alive detects it); cluster membership beyond the nodes of a group scope; discovery of a node no one has a reference to (see the libp2p transport's `resolve`); end-to-end encryption; generated codecs.

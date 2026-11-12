@@ -15,9 +15,8 @@ import 'package:dactor_libp2p/dactor_libp2p.dart';
 final transport = Libp2pTransport(await startHost(), closeHost: true);
 final node = RemoteNode(system, transport, codecs: codecs());
 
-// Before a first contact, libp2p needs an address for the other node:
-await transport.addAddress('/ip4/203.0.113.7/udp/4001/udx/p2p/12D3KooW…');
-final store = node.resolve('dactor://12D3KooW…/store?cap=…');
+// The text of a reference carries its node's addresses (see Discovery):
+final store = node.resolve('dactor://12D3KooW…/store?cap=…&addr=…');
 ```
 
 `example/two_nodes.dart` runs as two operating-system processes. The server prints its libp2p address and the store's dactor address, and the client takes both.
@@ -38,6 +37,17 @@ For the common case, `startHost` builds one with UDX, Noise and Yamux:
 | `announce` | Which of its addresses the node advertises, replacing libp2p's default filter; for example, only relay addresses. |
 | `keepAlive`, `keepAliveTimeout` | Yamux ping interval, and how long a ping may go unanswered before the connection is closed. |
 | `allowLoopback` | Keep loopback addresses, for tests on one machine. |
+
+## Discovery
+
+The transport is an `AddressBook` (see `dactor_remote`'s README), so references and process groups carry addresses between nodes: a node that is handed a reference, or the text of one, can dial its node.
+
+- `localAddresses` are what the node passes on: by default the addresses it could dial itself, so a relay that is only reachable over TCP is left out of what a UDX node advertises. `advertise:` chooses otherwise.
+- What it learns, from references or from the peers it identifies, is in `addressesOf(node)` and the host's peer store.
+- `resolve:` is asked for the addresses of a node before a dial when none are known at all: the place for a DHT lookup or a rendezvous service.
+- `addAddress` still works for a first contact by hand.
+
+`test/discovery_test.dart` covers a reference handed over, the text of one, a process group, and a resolver, with the node behind a relay.
 
 ## Reaching a node behind a NAT
 
@@ -72,7 +82,26 @@ For a hole punch, both nodes need their public address. They learn it from the p
 
 - **A broken stream or connection reports the node down.** Watchers and linked actors get `NoConnectionExit`, and pending asks fail with `NodeUnreachable`. The next message opens a new stream. Moving off a relay (above) is not a break.
 - **A peer that vanishes without closing anything** (a killed process, a phone out of signal) is noticed through the Yamux keep-alive, after `keepAliveTimeout`. UDX's own 30 s idle timeout is the backstop. `test/keepalive_test.dart` kills a peer process and expects it noticed within 5 s with a 2 s timeout; it takes about 2.2 s.
+- **A quiet node is not a lost one.** A Yamux read without a deadline gives up after five minutes without data, and the transport used to take that for a broken stream: two nodes with nothing to say to each other saw each other drop every five minutes. The transport now sets a read deadline far in the future before every read (libp2p clears deadlines on an accepted stream after the handler has started, so setting it once is not enough); the keep-alive is what notices a dead connection. `tool/idle_probe.dart` leaves two nodes idle for six minutes.
 - **A dial to a node that is gone fails only after `dialTimeout`**, 15 s by default. Over UDP nothing refuses a dial, so an `ask` with a shorter timeout fails with `TimeoutException` instead of `NodeUnreachable`.
+
+## On phones
+
+`example/mobile_probe` is a Flutter app and a laptop peer that check each other through a public relay (Ricochet): an ask, round trips, 5,000 ordered messages, 1 MiB, and an ask back. Run on an iPhone on cellular and an Android phone on Wi-Fi, with a laptop on the same Wi-Fi. The phones were given only the laptop's reference and found each other through a process group.
+
+| Link | Route | Ask (median) | 5,000 in order | 1 MiB |
+|---|---|---|---|---|
+| Laptop–Android | direct, Wi-Fi | 11–15 ms | 0.4–0.9 s | 0.35–0.8 s |
+| Laptop–iPhone | relay, cellular | 43–70 ms | 0.3–6.5 s | 0.6–7.5 s |
+| Android–iPhone | relay, cellular | 59–72 ms | 0.4–2.3 s | 0.6–3.0 s |
+| Android–iPhone | direct, iPhone on Wi-Fi | 26–31 ms | 0.4–0.7 s | 0.4–1.1 s |
+
+The slow ends are several checks at once over one cellular link. Every message arrived in order in every run.
+
+- **No hole punch from cellular.** Links to the iPhone on cellular stayed on the relay; behind a carrier NAT that is expected, and the relay carried everything.
+- **In the background.** iOS suspends the app at once; Android cuts its network about 6 s after the screen goes off. The other nodes notice within 15–25 s (the keep-alive). On return, the phone finds its old links dead, reconnects within 0.3–14 s, and the group passes its members again.
+- **Network switch.** With Wi-Fi turned on and off again, the iPhone's relayed link to the laptop moved between cellular and Wi-Fi without breaking (iOS kept the connection alive). Its direct LAN link to the Android phone broke when Wi-Fi went off, was noticed after about 17 s, and came back through the relay 3 s later. A relayed link does not move to a direct one when both ends come onto the same network; only a new connection tries a punch.
+- **Idle.** Two nodes stayed connected through 21 minutes without traffic.
 
 ## Same as local
 
@@ -97,6 +126,6 @@ Most of the ask latency belongs to the stack. A raw 8-byte round trip on one lib
 
 ## Not here yet
 
-- Discovery: no DHT or mDNS integration. Addresses are handed over by hand.
-- Tests on real devices and a carrier NAT.
+- A DHT or mDNS resolver. The `resolve` hook is there for one.
+- Trying a direct connection again on a relayed link when the network changes.
 - Many streams per node pair (one per direction now, so a large message delays the ones behind it).

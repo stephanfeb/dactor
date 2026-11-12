@@ -1,0 +1,24 @@
+name: mobile_probe
+description: "Checks dactor_libp2p from phones, through the Ricochet relay."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dactor:
+    path: ../../../..
+  dactor_remote:
+    path: ../../../dactor_remote
+  dactor_libp2p:
+    path: ../..
+  dart_libp2p: ^4.12.1
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

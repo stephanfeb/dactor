@@ -264,6 +264,35 @@ Phase 5, fourth part: hardening, process groups and global names.
 - TCP heartbeats are still not done: a silent, still-open TCP connection is
   not detected (libp2p's keep-alive does detect it).
 
+Phase 5, fifth part: discovery, and phones.
+
+- **A reference brings its node's addresses.** On a transport that is an
+  `AddressBook` (new interface; `Libp2pTransport` is one), a reference sent
+  in a message carries up to eight addresses of its node, and `uriOf` adds
+  them to the text as `addr` parameters. Process groups pass on the
+  addresses of the nodes they know. A node needs an address for one node
+  only.
+- `Libp2pTransport`: `localAddresses` (only those this host can dial, or
+  `advertise:`), addresses learned through identify, and a `resolve:` hook
+  asked for a node no one gave an address for (where a DHT would go).
+- **Fixed: idle libp2p links dropped every five minutes.** A Yamux read
+  with no deadline gives up after five minutes without data; the transport
+  took that for a broken stream and reported the node down. The transport
+  now sets a far deadline before every read (libp2p clears deadlines on
+  accepted streams after the handler starts). Found on the phones; new
+  `tool/idle_probe.dart`.
+- `ProcessGroups` forgets a node that was passed on and has been
+  unreachable for `forgetAfter` (10 minutes, counted in retries), and no
+  longer passes on a node a retry has missed. Nodes given to `connect` are
+  kept. A node that was gone for good used to be retried, and spread to
+  every newcomer, for ever.
+- New `packages/dactor_libp2p/example/mobile_probe`: a Flutter app and a
+  laptop peer that check each other through the Ricochet relay. Run on an
+  iPhone on cellular and an Android phone on Wi-Fi: discovery through a
+  group, every check passing over relay and direct links, background and
+  return, Wi-Fi on and off, 21 idle minutes. Results in the
+  `dactor_libp2p` README ("On phones").
+
 ## 1.3.0
 
 - **`ask()` no longer retries by default.** `AskConfig()` now has

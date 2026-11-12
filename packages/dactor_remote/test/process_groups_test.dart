@@ -174,4 +174,47 @@ void main() {
     await settle(150);
     expect(seen('c', 'g'), ['b/b1']);
   });
+  test(
+      'a node passed on and gone for good is forgotten; one given to '
+      'connect is not', () async {
+    for (final name in ['a', 'b']) {
+      await groups[name]!.close();
+      groups[name] = ProcessGroups(nodes[name]!.remote,
+          retry: const Duration(milliseconds: 100),
+          forgetAfter: const Duration(milliseconds: 500));
+    }
+    await groups['c']!.close();
+    groups['c'] = ProcessGroups(nodes['c']!.remote,
+        retry: const Duration(milliseconds: 100));
+    // a learns of c from b.
+    groups['a']!.connect('b');
+    groups['b']!.connect('c');
+    await settle(150);
+    expect(groups['a']!.nodes, {'b', 'c'});
+
+    network.isolate('c');
+    await settle(900);
+    expect(groups['a']!.nodes, {'b'}, reason: 'a was told of c');
+    expect(groups['b']!.nodes, {'a', 'c'}, reason: 'b connected to c');
+
+    // b still finds c when it is back, and passes it on again.
+    network.healAll();
+    await settle(400);
+    expect(groups['a']!.nodes, {'b', 'c'});
+  });
+
+  test('a node a retry has missed is not passed on', () async {
+    groups['a']!.connect('b');
+    groups['a']!.connect('c');
+    await settle();
+    network.isolate('c');
+    await settle(450); // noticed, then missed by a retry
+
+    nodes['d'] = join(network, 'd');
+    groups['d'] = ProcessGroups(nodes['d']!.remote,
+        retry: const Duration(milliseconds: 100));
+    groups['d']!.connect('a');
+    await settle(150);
+    expect(groups['d']!.nodes, {'a', 'b'});
+  });
 }

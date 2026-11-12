@@ -257,15 +257,58 @@ class RemoteNode implements TransportListener {
   }
 
   /// The address of [actor] as text: `dactor://<node>/<id>`, with the
-  /// capability token as a `cap` query parameter. Anyone who has the text
-  /// has the reference.
-  String uriOf(ActorRef actor) {
-    final [node as String, path as String, cap] =
-        _context.encodeRef(actor) as List;
+  /// capability token as a `cap` query parameter and, when the transport is
+  /// an [AddressBook], where the node can be reached as `addr` parameters.
+  /// Anyone who has the text has the reference, and can reach it.
+  String uriOf(ActorRef actor, {bool withAddresses = true}) {
+    final [node as String, path as String, cap, ...rest] =
+        _context.encodeRef(actor, withAddresses: withAddresses) as List;
     final address = 'dactor://${Uri.encodeComponent(node)}/'
         '${Uri.encodeComponent(path)}';
-    return cap == null ? address : '$address?cap=${_hex(cap as Uint8List)}';
+    final query = [
+      if (cap != null) 'cap=${_hex(cap as Uint8List)}',
+      if (rest case [List addresses])
+        for (final a in addresses) 'addr=${Uri.encodeQueryComponent('$a')}',
+    ];
+    return query.isEmpty ? address : '$address?${query.join('&')}';
   }
+
+  /// How other nodes can reach this one, when the transport is an
+  /// [AddressBook]; otherwise empty.
+  List<String> get addresses => switch (transport) {
+        AddressBook book => book.localAddresses,
+        _ => const [],
+      };
+
+  /// What this node knows of how to reach [node]: this node's own
+  /// [addresses] for itself, empty when the transport is no [AddressBook].
+  List<String> addressesOf(String node) => switch (transport) {
+        _ when node == id => addresses,
+        AddressBook book => book.addressesOf(node),
+        _ => const [],
+      };
+
+  /// Passes on to the transport that [node] may be reached at [addresses].
+  /// At most [maxAddresses] are taken, and none longer than 1024
+  /// characters. Does nothing for this node itself, or when the transport
+  /// is no [AddressBook].
+  void learnAddresses(String node, Iterable<Object?> addresses) {
+    if (transport case final AddressBook book when node != id) {
+      _learn(book, node, addresses);
+    }
+  }
+
+  void _learn(AddressBook book, String node, Iterable<Object?> addresses) {
+    final usable = [
+      for (final a in addresses)
+        if (a is String && a.isNotEmpty && a.length <= 1024) a
+    ].take(maxAddresses).toList();
+    if (usable.isNotEmpty) book.learn(node, usable);
+  }
+
+  /// How many addresses of one node are sent along with a reference, or
+  /// taken from one.
+  static const maxAddresses = 8;
 
   /// The reference behind a result of [uriOf].
   ActorRef resolve(String uri) {
@@ -280,10 +323,18 @@ class RemoteNode implements TransportListener {
         ? const <String, String>{}
         : Uri.splitQueryString(uri.substring(query + 1));
     final cap = parameters['cap'];
+    final addresses = query < 0
+        ? const <String>[]
+        : [
+            for (final part in uri.substring(query + 1).split('&'))
+              if (part.startsWith('addr='))
+                Uri.decodeQueryComponent(part.substring(5))
+          ];
     return _context.decodeRef([
       Uri.decodeComponent(address.substring(scheme.length, slash)),
       Uri.decodeComponent(address.substring(slash + 1)),
       cap == null ? null : _unhex(cap),
+      if (addresses.isNotEmpty) addresses,
     ]);
   }
 
@@ -354,7 +405,9 @@ class RemoteNode implements TransportListener {
       _fType: type,
       _fVersion: version,
       _fPayload: data,
-      if (sender != null) _fSender: _context.encodeRef(sender),
+      // Without addresses: the receiver is talking to this node already.
+      if (sender != null)
+        _fSender: _context.encodeRef(sender, withAddresses: false),
       if (correlation != null) _fCorrelation: correlation,
     });
   }
@@ -742,21 +795,33 @@ class _Context implements CodecContext {
   final RemoteNode node;
   _Context(this.node);
 
+  /// A reference as `[node, path, capability]`, followed, [withAddresses],
+  /// by the addresses its node is known at (when there are any).
   @override
-  Object? encodeRef(ActorRef ref) {
-    if (ref is RemoteRef) return [ref.node, ref.path, ref._capability];
-    if (ref is _ReplyRef) {
+  Object? encodeRef(ActorRef ref, {bool withAddresses = true}) {
+    final List<Object?> encoded;
+    if (ref is RemoteRef) {
+      encoded = [ref.node, ref.path, ref._capability];
+    } else if (ref is _ReplyRef) {
       throw ArgumentError(
           'The sender of a remote ask can be replied to, not passed on');
+    } else {
+      final path = node._pathOf(ref);
+      encoded = [node.id, path, node._capabilityFor(path)];
     }
-    final path = node._pathOf(ref);
-    return [node.id, path, node._capabilityFor(path)];
+    if (withAddresses) {
+      final addresses =
+          node.addressesOf(encoded[0] as String).take(RemoteNode.maxAddresses);
+      if (addresses.isNotEmpty) encoded.add([...addresses]);
+    }
+    return encoded;
   }
 
   @override
   ActorRef decodeRef(Object? data) {
-    final [name as String, path as String, capability as Uint8List?] =
+    final [name as String, path as String, capability as Uint8List?, ...rest] =
         data as List;
+    if (rest case [List addresses]) node.learnAddresses(name, addresses);
     if (name == node.id) {
       // One of this node's own, coming home.
       if (!node._allowed(path, capability)) {
