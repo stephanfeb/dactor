@@ -11,13 +11,14 @@ Dactor provides a robust actor system for building concurrent, fault-tolerant, a
 ## ✨ Features
 
 - 🎯 **Pure Actor Model**: Type-safe message passing with actor isolation
-- 🔄 **Reliable Ask Pattern**: Request-response with configurable retries and exponential backoff  
-- 🛡️ **Fault Tolerance**: Supervision trees with customizable recovery strategies
+- 🔄 **Ask Pattern**: request-response with timeouts, and opt-in retries with exponential backoff
+- 🛡️ **Fault Tolerance**: OTP-style supervisors, links, monitors and exit reasons; each actor runs in its own zone
+- 🧪 **Deterministic Simulation**: seeded scheduling, virtual time and fault injection; a failing seed replays exactly
 - 🧱 **Isolate Placement**: run any actor in its own isolate, with a watchdog that kills and restarts it if it hangs
 - 🧩 **Typed Behaviours**: `GenServer`, `GenStatem` and `TypedRef<M>` with compile-time checked messages
 - 📡 **Event Bus**: Publish-subscribe messaging for event-driven architectures
 - ⏰ **Actor Timers**: Schedule messages with single-shot, fixed-delay, and fixed-rate timers
-- ⚡ **High Performance**: >29K messages/sec throughput, <1ms latency
+- ⚡ **High Performance**: about 500K messages/sec to one actor, tens of microseconds per message
 - 📊 **Built-in Observability**: Comprehensive metrics, tracing, and monitoring
 - 🎛️ **Actor Pooling**: Scale with worker pools and round-robin routing
 - 💾 **Memory Efficient**: about 1.7 KB per idle actor
@@ -30,7 +31,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dactor: ^1.0.0
+  dactor: ^2.0.0
 ```
 
 ### Basic Example
@@ -39,6 +40,7 @@ A counter, written as a `GenServer`: the state is a value, the messages are a se
 
 ```dart
 import 'package:dactor/dactor.dart';
+import 'package:dactor/spi.dart';
 
 // The messages the counter accepts. A message that mixes in Call<R> expects
 // a reply of type R.
@@ -122,45 +124,30 @@ class MyActor extends Actor {
 
 ### Message Passing
 
-Messages are the primary communication mechanism:
+Any value can be a message. `tell` sends it as it is, and the actor's `onMessage` receives exactly that value:
 
 ```dart
-// Simple message
-counter.tell(LocalMessage(payload: 'increment'));
-
-// Message with sender - IMPORTANT: Pass sender as separate parameter
-counter.tell(LocalMessage(payload: 'ping'), sender: otherActor);
-
-// Custom message types
-class CustomMessage implements Message {
-  final String data;
-  CustomMessage(this.data);
-  
-  // Implement Message interface
-  @override
-  String get correlationId => 'custom';
-  @override
-  Map<String, dynamic> get metadata => {};
-  @override
-  ActorRef? get replyTo => null;
-  @override
-  DateTime get timestamp => DateTime.now();
-}
+counter.tell('increment');
+counter.tell(Deposit(100));
 ```
 
-#### ⚠️ Critical: Proper Sender Passing
+#### Senders are stamped, not passed
 
-When sending messages that expect a reply, **always pass the sender as a separate parameter** to the `tell()` method:
+`tell` takes no sender. The runtime records the actor whose code is calling `tell`, or none if the call comes from outside any actor. The receiver sees it as `context.sender`, and answering is `context.sender?.tell(reply)`. An actor cannot claim to be another one.
+
+An actor that hands work on, such as a router, uses `context.forward(target, message)`. That keeps the original sender, so `target` answers whoever asked.
+
+`Terminated` and `ExitSignal` come only from the runtime. One told in the ordinary way is dropped to the dead letters.
+
+Code that is not an actor but carries messages for one, such as a transport, a bridge or a test, can name a sender with `sendAs` from `package:dactor/spi.dart`:
 
 ```dart
-// ✅ CORRECT: Sender passed as separate parameter
-actor.tell(LocalMessage(payload: 'request'), sender: probe.ref);
+import 'package:dactor/spi.dart';
 
-// ❌ INCORRECT: Trying to embed sender in message
-actor.tell(LocalMessage(payload: 'request', sender: probe.ref)); // This won't work!
+sendAs(probe.ref, () => actor.tell('request'));
 ```
 
-The actor system automatically sets `context.sender` when processing messages, but only when the sender is passed correctly as a parameter to `tell()`.
+`LocalMessage`, `AskableMessage` and `AskableResponse` are deprecated and will be removed in 3.0. A `LocalMessage` that is told is unwrapped to its payload, and the sender it carries is ignored.
 
 ## 🎯 Ask Pattern with Reliability
 
@@ -174,7 +161,7 @@ final response = await actor.ask('ping', Duration(seconds: 1));
 
 // With custom message
 final result = await actor.ask(
-  LocalMessage(payload: 'get_data'),
+  'get_data',
   Duration(seconds: 5),
 );
 ```
@@ -405,10 +392,11 @@ The type is a promise made where the reference is created. Nothing checks that t
 | `handleCall(request, state, from)` | an `M` that mixes in `Call` | `request.reply(value, newState)`, `NoReply(newState)` or `StopReply(value, newState)` |
 | `handleCast(message, state)` | any other `M` | the new state |
 | `handleInfo(message, state)` | anything that is not an `M`, such as `Terminated` or `ExitSignal` | the new state |
+| `handleContinue(arg, state)` | each `continueWith(arg)` from `init` or a handler, before the next message | the new state |
 | `terminate(state)` | `postStop` | |
 | `codeChange(oldVersion, oldState)` | start after `sys.upgrade` | the first state |
 
-All of them may be asynchronous except `terminate`. `request.reply` checks the type of the reply against the request. After `NoReply`, answer later with `request.replyTo(from, value)`. A handler that throws changes nothing: the state is whatever the last handler returned.
+All of them may be asynchronous except `terminate`. `request.reply` checks the type of the reply against the request. After `NoReply`, answer later with `request.replyTo(from, value)`. A handler that throws changes nothing: the state is whatever the last handler returned. Work that should not hold up a caller goes in `handleContinue`: from `init` it runs after `spawn` has returned, from `handleCall` after the reply has gone, and in both cases before any other message, as OTP's `handle_continue` does.
 
 ### GenStatem
 
@@ -416,12 +404,22 @@ All of them may be asynchronous except `terminate`. `request.reply` checks the t
 
 | Transition | Effect |
 |------------|--------|
-| `next(state, data:, reply:, timeout:)` | Move to another state. Runs `onEnter`, cancels the old state timeout, replays postponed events. |
-| `keep(data:, reply:, timeout:)` | Stay. |
+| `next(state, data:, reply:, timeout:, eventTimeout:, timeouts:)` | Move to another state. Runs `onEnter`, cancels the old state timeout, replays postponed events. |
+| `keep(data:, reply:, timeout:, eventTimeout:, timeouts:)` | Stay. |
 | `postpone()` | Stay, and handle this event again after the next change of state. |
 | `halt(reply:)` | Stop the machine. |
 
-A `timeout:` starts a state timeout. If the machine is still in that state when it runs out, `onTimeout(state, data)` is called. Override `stateTimeout(state)` to give a state a default. Messages that are not an `M` go to `onInfo`.
+`reply:` answers a request that mixes in `Call<R>`. Give it as `request.answer(value)`, which checks that the value is an `R`.
+
+There are three kinds of timeout, as in OTP:
+
+| Timeout | Set with | Cancelled by | Calls |
+|---------|----------|--------------|-------|
+| State | `timeout:`, or `stateTimeout(state)` as a default | a change of state | `onTimeout(state, data)` |
+| Event | `eventTimeout:` | any message at all | `onEventTimeout(state, data)` |
+| Generic | `timeouts: {name: duration}` | setting the name to `null`, or `halt` | `onGenericTimeout(name, state, data)` |
+
+Generic timeouts survive changes of state, and setting a name again restarts its timer. Messages that are not an `M` go to `onInfo`.
 
 `example/gen_statem_example.dart` is a code lock that uses a state timeout and a postponed event.
 
@@ -431,7 +429,7 @@ Inside a handler, `await context.receive<T>(where: ..., timeout: ...)` waits for
 
 ```dart
 case StartTransfer(:final id):
-  bank.tell(LocalMessage(payload: Debit(id)), sender: context.self);
+  bank.tell(Debit(id));
   final ack = await context.receive<DebitAck>(
       where: (a) => a.id == id, timeout: Duration(seconds: 5));
 ```
@@ -489,6 +487,16 @@ await apps.stop('database');  // stops web, then database
 await apps.stopAll();
 ```
 
+When a root actor ends by itself, for instance because its supervisor gave up, the controller stops the applications that depend on it and calls `stopped()`. What happens next depends on the application's `restart` type, as in OTP:
+
+| `restart` | When its root ends |
+|-----------|--------------------|
+| `temporary` (default) | Only this application and its dependents stop. |
+| `transient` | Everything stops if the root ended abnormally. |
+| `permanent` | Everything stops. |
+
+Each of these is reported on `apps.exits` as an `ApplicationExit`. Dactor does not stop the Dart process; listen to `exits` to do that.
+
 If an application fails to start, the ones that call had started are stopped again.
 
 ## 🧱 Actors in Their Own Isolate
@@ -525,6 +533,42 @@ Limits: an isolate blocked inside a native call (synchronous I/O, FFI, `sleep`) 
 
 `packages/dactor_remote` (experimental, not published) makes an actor on another node an ordinary `ActorRef`: `tell`, `ask`, `watch` and `context.link` work across nodes, a lost connection is reported as `NoConnectionExit`, and a node only accepts messages from peers that hold a reference to the actor. It comes with an in-memory network that runs under the simulator and a plain TCP transport for one machine. See its [README](packages/dactor_remote/README.md). `packages/dactor_libp2p` adds a libp2p transport: authenticated, encrypted, and able to reach a node behind a NAT through a relay ([README](packages/dactor_libp2p/README.md)).
 
+## 🧬 Coming from Erlang/OTP
+
+Most of OTP has a counterpart:
+
+| Erlang/OTP | Dactor |
+|------------|--------|
+| `spawn`, a pid | `system.spawn`, an `ActorRef` |
+| `Pid ! Msg` | `ref.tell(msg)` |
+| `gen_server:call` | `ref.ask(msg)`, or `typedRef.call(request)` |
+| `link`, `monitor`, `trap_exit` | `context.link`, `context.watch`, `context.trapExits` |
+| `normal`, `shutdown`, `killed`, `{error, ...}`, `noproc` | `NormalExit`, `ShutdownExit`, `KilledExit`, `ErrorExit`, `NoProcExit` |
+| `exit(Pid, kill)` | `system.kill(ref)` |
+| `supervisor`: `one_for_one`, `one_for_all`, `rest_for_one` | `OneForOneStrategy`, `AllForOneStrategy`, `RestForOneStrategy` |
+| child specs, restart intensity | `ChildSpec` with `RestartType`, `maxRestarts` within `period` |
+| `gen_server`, `handle_continue` | `GenServer`, `continueWith` and `handleContinue` |
+| `gen_statem` | `GenStatem`: state enter, state, event and generic timeouts, `postpone` |
+| `application` | `Application` and `ApplicationController` |
+| `receive` with a pattern | `context.receive<T>(where:, timeout:)` |
+| `sys` | `system.sys` |
+| `pg`, `global` | `ProcessGroups`, `GlobalNames` in `dactor_remote` |
+
+Differences that come from the Dart VM:
+
+- **No preemption.** Actors share one event loop and take turns. The pump yields every 128 messages or 4 ms, but a handler stuck in synchronous code blocks every actor in its isolate, and `kill` can only stop an actor between callbacks. Run an actor that computes, blocks, or might hang as `Isolated`: its watchdog can kill it.
+- **No heap per process.** Messages are passed by reference, not copied. Send immutable values; `dactor_lints` reports mutable ones. Messages to an `Isolated` actor are copied.
+- **No hot code loading.** `sys.upgrade` restarts an actor as a different class and hands its state to `codeChange`. There are no releases or relups.
+
+Deliberate differences:
+
+- A linked actor fails with `LinkedActorExited` instead of being killed, so its supervisor decides what happens to it.
+- Senders are recorded by the runtime and cannot be forged; a `Terminated` or `ExitSignal` comes only from the runtime.
+- `gen_event` has no counterpart beyond the `EventBus`, which is publish-subscribe.
+- Between nodes: there is no shared cookie, and a reference carries a capability token; there is no arbitrary `rpc`, only remote spawn of a registered behaviour; a `GlobalNames` name is unique once the network is quiet, with no cluster lock.
+
+Not there: ETS, DETS, Mnesia, `observer` and a remote shell.
+
 ## ⚡ Actor Pooling for Scalability
 
 Scale your actors with worker pools:
@@ -539,7 +583,7 @@ final router = await system.spawn(
 
 // Messages are distributed round-robin to workers
 for (int i = 0; i < 100; i++) {
-  router.tell(LocalMessage(payload: 'task_$i'));
+  router.tell('task_$i');
 }
 ```
 
@@ -761,9 +805,9 @@ class RateLimiterActor extends Actor {
     if (message == 'request') {
       if (_requestCount < 100) {
         _requestCount++;
-        context.sender?.tell(LocalMessage(payload: 'allowed'));
+        context.sender?.tell('allowed');
       } else {
-        context.sender?.tell(LocalMessage(payload: 'rate-limited'));
+        context.sender?.tell('rate-limited');
       }
     } else if (message == 'reset-counter') {
       _requestCount = 0;
@@ -799,7 +843,7 @@ class PaymentProcessed {
 class OrderService extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
-    if (message is LocalMessage && message.payload == 'create_order') {
+    if (message == 'create_order') {
       final orderId = 'ORDER-${DateTime.now().millisecondsSinceEpoch}';
       
       // Publish event to all subscribers
@@ -1163,8 +1207,8 @@ final system = ActorSystem.create(config);
 
 Dactor is designed for high performance:
 
-- **Throughput**: >29,000 messages/second
-- **Latency**: <112μs average message processing
+- **Throughput**: about 500,000 messages/second to one actor; about 49,000 through a round-robin pool, whose router is the bottleneck
+- **Latency**: about 25 μs per message to one actor, 8 μs through a pool
 - **Memory**: about 1.7 KB per idle actor
 - **Scalability**: Supports thousands of concurrent actors
 
@@ -1174,13 +1218,13 @@ Run the benchmarks:
 dart test test/benchmark/
 ```
 
-Example benchmark results:
+Results on an Apple silicon laptop, Dart 3.11, in the test runner (JIT):
 ```
-Single Actor - Processed 100000 messages in 3401ms
-Single Actor - Throughput: 29403.69 msg/sec
+Single Actor - Processed 100000 messages in 200ms
+Single Actor - Throughput: 500000.00 msg/sec
 
-Pooled Actor - Processed 100000 messages in 1250ms  
-Pooled Actor - Throughput: 80000.00 msg/sec
+Pooled Actor - Processed 100000 messages in 2035ms
+Pooled Actor - Throughput: 49140.05 msg/sec
 ```
 
 ## 🧪 Testing Your Actors
@@ -1258,7 +1302,7 @@ class MyActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (message == 'ping') {
-      context.sender?.tell(LocalMessage(payload: 'pong'));
+      context.sender?.tell('pong');
     }
   }
 }
@@ -1270,8 +1314,8 @@ test('should respond with pong', () async {
   // 2. Spawn the actor under test
   final actor = await system.spawn('my-actor', () => MyActor());
   
-  // 3. Send a message from the probe to the actor (CORRECT sender passing)
-  actor.tell(LocalMessage(payload: 'ping'), sender: probe.ref);
+  // 3. Send a message from the probe to the actor (sendAs is in package:dactor/spi.dart)
+  sendAs(probe.ref, () => actor.tell('ping'));
   
   // 4. Assert that the probe receives the expected reply
   await probe.expectMsg('pong');
@@ -1287,7 +1331,7 @@ test('should receive typed message', () async {
   final probe = await system.createProbe();
   final actor = await system.spawn('test', () => MyActor());
   
-  actor.tell(LocalMessage(payload: 'get_number'), sender: probe.ref);
+  sendAs(probe.ref, () => actor.tell('get_number'));
   
   // Expect a message of specific type and get it back
   final number = await probe.expectMsgType<int>(timeout: Duration(seconds: 2));
@@ -1304,8 +1348,9 @@ class AskerActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (message == 'ask_and_reply') {
-      final response = await context.sender?.ask(LocalMessage(payload: 'question'));
-      context.sender?.tell(LocalMessage(payload: 'response: ${response?.payload}'));
+      final asker = context.sender;
+      final response = await asker?.ask<String>('question');
+      asker?.tell('response: $response');
     }
   }
 }
@@ -1314,7 +1359,7 @@ test('should handle replies from probe', () async {
   final probe = await system.createProbe();
   final actor = await system.spawn('asker', () => AskerActor());
 
-  actor.tell(LocalMessage(payload: 'ask_and_reply'), sender: probe.ref);
+  sendAs(probe.ref, () => actor.tell('ask_and_reply'));
 
   // Expect the question from the actor
   await probe.expectMsg('question');
@@ -1329,7 +1374,7 @@ test('should handle replies from probe', () async {
 
 #### Testing Best Practices
 
-1. **Always pass sender correctly**: Use `actor.tell(message, sender: probe.ref)` not `actor.tell(LocalMessage(payload: data, sender: probe.ref))`
+1. **Make the probe the sender**: test code runs outside any actor, so use `sendAs(probe.ref, () => actor.tell(message))` from `package:dactor/spi.dart`
 
 2. **Use timeouts for reliability**: Always specify timeouts for `expectMsg` and `expectMsgType` in production tests
 
@@ -1350,7 +1395,7 @@ test('transfers never lose money', () {
     // ... send messages from several actors ...
     await sim.settle();                         // until every actor is idle
     await sim.wait(Duration(minutes: 5));       // virtual: returns at once
-    expect(await bank.ask<int>(LocalMessage(payload: Total())), 1000);
+    expect(await bank.ask<int>(Total()), 1000);
   }, seeds: 1000);
 });
 ```
@@ -1373,7 +1418,7 @@ When a seed fails, `explore` throws a `SimulationFailure` that names the seed an
 
 Limits:
 
-- Only message order and time are simulated. `DateTime.now()` and `Stopwatch` read the real clock, and correlation ids are still random.
+- Only message order and time are simulated. `DateTime.now()` and `Stopwatch` read the real clock.
 - Nothing outside the isolate completes inside a simulation: no sockets, files or other isolates. Waiting for one ends the run with `SimulationDeadlock`.
 - Continuations of one handler run in the order Dart runs them. The scheduler reorders deliveries and timers, not microtasks.
 - The simulation needs the real `LocalActorSystem`; it does not combine with `TestActorSystem`.
@@ -1387,14 +1432,15 @@ To enable tracing, configure your `TestActorSystem` with an `InMemoryTraceCollec
 
 ```dart
 import 'package:dactor/dactor.dart';
+import 'package:dactor/spi.dart';
 import 'package:dactor_test/dactor_test.dart';
 import 'package:test/test.dart';
 
 class HelloActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
-    if (message.payload.toString() == 'hello') {
-      context.sender?.tell(LocalMessage(payload: 'world'));
+    if (message == 'hello') {
+      context.sender?.tell('world');
     }
   }
 }
@@ -1418,16 +1464,15 @@ void main() {
       final actor = await system.spawn('test', () => HelloActor());
 
       // Send a message with the probe as the sender
-      final message = LocalMessage(payload: 'hello', sender: probe.ref);
-      actor.tell(message);
+      sendAs(probe.ref, () => actor.tell('hello'));
 
       // Wait for messages to be processed
       await probe.expectMsg('world');
 
-      // 3. Inspect the trace
-      final trace = collector.traces[message.correlationId];
-      expect(trace, isNotNull);
-      expect(trace!.length, 2);
+      // 3. Inspect the trace: one id ties a message's events together
+      final trace = collector.traces.values
+          .firstWhere((events) => events.first.message == 'hello');
+      expect(trace.length, 2);
       expect(trace[0].event, 'sent');
       expect(trace[1].event, 'processed');
     });
@@ -1435,7 +1480,7 @@ void main() {
 }
 ```
 
-The `InMemoryTraceCollector` stores a list of `TraceEvent` objects for each `correlationId`, keeping at most `maxEvents` (default 10,000) and dropping the oldest correlation ids first. Each event records what happened to the message (e.g., `sent`, `processed`, `replied`) and which actor was involved.
+The `InMemoryTraceCollector` stores a list of `TraceEvent` objects for each message, under an id the runtime gives it, keeping at most `maxEvents` (default 10,000) and dropping the oldest correlation ids first. Each event records what happened to the message (e.g., `sent`, `processed`, `replied`) and which actor was involved.
 
 ## 🎯 Best Practices
 
@@ -1496,20 +1541,10 @@ Timer.periodic(Duration(minutes: 1), (_) {
 ## 🔧 Advanced Features
 
 ### Custom Message Types
+Any class will do. A sealed hierarchy lets `onMessage` switch over every case:
+
 ```dart
-abstract class GameMessage implements Message {
-  @override
-  String get correlationId => 'game-${DateTime.now().millisecondsSinceEpoch}';
-  
-  @override
-  Map<String, dynamic> get metadata => {'game': true};
-  
-  @override
-  ActorRef? get replyTo => null;
-  
-  @override
-  DateTime get timestamp => DateTime.now();
-}
+sealed class GameMessage {}
 
 class PlayerMove extends GameMessage {
   final String playerId;
@@ -1548,7 +1583,6 @@ class ContextActor extends Actor {
 - **`ActorRef`** - Reference to an actor for sending messages
 - **`ActorSystem`** - Manages actor lifecycle and messaging
 - **`EventBus`** - Manages event subscriptions and publishing
-- **`Message`** - Interface for messages passed between actors
 - **`SupervisorActor`** - Base class for supervising other actors
 - **`TimerScheduler`** - Manages scheduled message delivery within actors
 

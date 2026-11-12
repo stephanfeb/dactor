@@ -1,7 +1,79 @@
-## Unreleased (experimental/otp-gap)
+## 2.0.0
 
-Phase 0 of `doc/otp-gap-roadmap.md`: the remaining audit items H2, H4 and H5.
+Dactor 2.0 brings the actor model closer to Erlang/OTP: a zone per actor,
+links and exit reasons, OTP-style supervisors, typed `GenServer` and
+`GenStatem` behaviours, applications, selective receive and `sys`. It adds a
+deterministic simulator for testing, and actors that run in an isolate of
+their own. The README's "Coming from Erlang/OTP" section maps OTP onto
+Dactor and lists where the two differ.
 
+Distribution lives in two companion packages in this repository,
+`dactor_remote` and `dactor_libp2p`. They are experimental and not yet
+published; this release carries the hooks they need in core.
+
+### Upgrading from 1.x
+
+Messages and senders. Actors receive exactly what was told, and the runtime
+records the sender.
+
+| 1.x | 2.0 |
+|-----|-----|
+| `ref.tell(LocalMessage(payload: m))` | `ref.tell(m)` |
+| `ref.tell(m, sender: context.self)` inside an actor | `ref.tell(m)` |
+| `worker.tell(m, sender: context.sender)` | `context.forward(worker, m)` |
+| `ref.tell(m, sender: probe.ref)` in a test | `sendAs(probe.ref, () => ref.tell(m))`, from `package:dactor/spi.dart` |
+| `class M implements Message` | `class M` |
+| `class R extends AskableResponse` | any class |
+| an `ActorRef` implementation: `tell(Message, {sender})` | `tell(Object?)`, reading `currentSender` if it needs the sender |
+| `watcher.tell(Terminated(...))` from a transport | `tellSystem(watcher, Terminated(...))` |
+| `DeadLetter.sender` is an `ActorRef` | `ActorRef?`, null outside any actor |
+| `Terminated.correlationId`, `timestamp`, `metadata` | removed |
+
+Behaviour that changed without a compile error. Check code that relies on
+any of these:
+
+- **Each actor runs in its own zone.** An error nothing catches (an
+  unawaited future, a timer callback) now fails the actor, and goes to its
+  supervisor.
+- **Stopping or restarting an actor drops what it left pending**: its
+  timers, and code waiting on an `await`. `finally` blocks around such an
+  `await` do not run, so release resources in `postStop`. Code after
+  `await context.system.stop(context.self)` does not run.
+- **Restarting an actor stops its children.** A supervisor that wants them
+  back creates them in `preStart`. Stopping an actor stops its children
+  first.
+- **Children started with `supervise(id, factory)` are permanent**: a
+  `system.stop(child)` brings one back as a new actor. Use `terminateChild`,
+  or start the child as `transient` or `temporary`.
+- **A restart budget belongs to the supervisor**, 10 restarts in 5 seconds
+  across all its children by default. A supervisor that exceeds it fails
+  with `RestartLimitExceeded` and its own supervisor decides. In 1.x each
+  child had a lifetime count and was quietly stopped when it ran out.
+  `maxRetries` and `within` are deprecated in favour of `maxRestarts` and
+  `period`.
+- `SupervisionDecision.escalate` escalates (it used to resume), and
+  `spawn(supervision:)` is honoured for top-level actors (it used to be
+  ignored).
+- `onChildFailure` is no longer called while the supervisor's `onMessage`
+  is running: decisions go through the supervisor's mailbox.
+
+Code that breaks at compile time, beyond the table above:
+
+- A custom supervision strategy extends `SupervisionStrategy` rather than
+  implementing it.
+- A class that implements `ActorContext` or `ActorRef` needs the new
+  members (`receive`, `forward`, `link`, `unlink`, `unwatch`, `trapExits`;
+  `ActorRef.unwatch`).
+- `Mailbox` and `Message` are no longer exported.
+- An exhaustive `switch` over `ExitReason` (new in 2.0) needs every case.
+- `dactor_test` 1.0.0 requires dactor 1.x. Use `dactor_test` 2.0.0, released
+  with this version.
+
+### Dispatch, escalation and start-up
+
+- **`Actor.context` is no longer marked `@internal`.** The annotation made
+  the analyzer warn on every use of `context` in an actor written outside
+  this package, which is every actor a user writes.
 - **The message pump yields to the event loop.** Dispatch used to run
   entirely in microtasks, so a mailbox backlog kept timers, I/O and `ask`
   timeouts waiting until it drained (a 1 ms timer measured at 1.4 s). The
@@ -41,7 +113,7 @@ Phase 0 of `doc/otp-gap-roadmap.md`: the remaining audit items H2, H4 and H5.
   decides. It was documented and never invoked.
 - Added `SupervisorActor.supervisedChildren`.
 
-Phase 1, first part: a zone per actor.
+### A zone per actor
 
 - **Each actor incarnation runs in its own zone.** An error nothing caught
   (an unawaited future, a timer or stream callback) now counts as that actor
@@ -70,7 +142,7 @@ Phase 1, first part: a zone per actor.
 - Cost: an idle actor takes about 1.7 KB, up from 1.1 KB, and single-actor
   throughput is 5 to 10 percent lower.
 
-Phase 1, second part: exit reasons and links.
+### Exit reasons and links
 
 - Added `ExitReason`, a sealed type saying why an actor ended: `NormalExit`
   (stopped on request), `ShutdownExit` (stopped by its parent or by system
@@ -89,7 +161,7 @@ Phase 1, second part: exit reasons and links.
   across restarts. Watchers are different: they are still told only when the
   actor is gone for good.
 
-Phase 1, third part: supervisors.
+### Supervisors
 
 - **Restart budgets belong to the supervisor, not to each child.** A
   supervisor that performs more than `maxRestarts` restarts within `period`
@@ -120,7 +192,7 @@ Phase 1, third part: supervisors.
 - A pool router now restarts workers within the default budget and fails
   when it is exceeded; it used to restart them without limit.
 
-Phase 1, fourth part: lints.
+### Lints
 
 - Added `packages/dactor_lints`, an analyzer plugin (Dart 3.10 or later)
   with two rules, both reported by `dart analyze` and in the IDE:
@@ -129,8 +201,7 @@ Phase 1, fourth part: lints.
   closure, or itself, in a message). This repository's own code has no
   findings. See `packages/dactor_lints/README.md` for how to enable it.
 
-Phase 2: behaviours and typed protocols. Everything here is an addition;
-existing actors and `ActorRef` are unchanged.
+### Behaviours and typed protocols
 
 - **`TypedRef<M>`**, from `ref.typed<M>()`: a compile-time view of an
   `ActorRef` that only accepts `M`. `Call<R>` marks a message as a request,
@@ -156,7 +227,7 @@ existing actors and `ActorRef` are unchanged.
   `example/gen_statem_example.dart`. The README's first example is now the
   `GenServer` counter.
 
-Phase 3: deterministic simulation testing.
+### Deterministic simulation testing
 
 - **`package:dactor/simulation.dart`**: `simulate` runs a test against an
   actor system on a seeded scheduler with virtual time; `explore` runs it
@@ -177,7 +248,7 @@ Phase 3: deterministic simulation testing.
   only when told to; the pump's dispatch step is shared between both modes.
   Throughput is unchanged.
 
-Phase 4: actors in their own isolate.
+### Actors in their own isolate
 
 - **`Isolated(factory)`**: an actor that runs the real actor in an isolate
   of its own and forwards messages to it one at a time. It is spawned,
@@ -196,11 +267,8 @@ Phase 4: actors in their own isolate.
   and `tool/probes/isolated_throughput.dart`.
 - Example: `example/isolated_example.dart`.
 
-Phase 5, first part: remote references (in `packages/dactor_remote`).
+### Hooks for distribution, and `dactor_remote`
 
-- **`Actor.context` is no longer marked `@internal`.** The annotation made
-  the analyzer warn on every use of `context` in an actor written outside
-  this package, which is every actor a user writes. This is in 1.3.0 too.
 - New exit reason **`NoConnectionExit`**. `ExitReason` is sealed, so an
   exhaustive `switch` over it needs the new case.
 - **`ForeignActorRef`**, with `LocalActorSystem.linkForeign`,
@@ -214,7 +282,7 @@ Phase 5, first part: remote references (in `packages/dactor_remote`).
   capability tokens, remote spawn by behaviour name, an in-memory network
   that runs under the simulator, and a plain TCP transport.
 
-Phase 5, second part: a libp2p transport (in `packages/dactor_libp2p`).
+### `dactor_libp2p`
 
 - New package `packages/dactor_libp2p` (not published): `Libp2pTransport`
   over a dart_libp2p `Host`. Nodes are named by peer id; Noise
@@ -226,7 +294,7 @@ Phase 5, second part: a libp2p transport (in `packages/dactor_libp2p`).
   `packages/dactor_remote/test/support/transport_scenarios.dart`, so every
   transport runs the same ones.
 
-Phase 5, third part: through real NATs.
+### Through real NATs
 
 - `Libp2pTransport` moves a node's frames off a relay when a direct
   connection to it appears (after a hole punch), without losing order or
@@ -240,7 +308,7 @@ Phase 5, third part: through real NATs.
   go-ricochet's mailbox Docker setup). Relay, hole punch and lost-node
   checks; cone and symmetric NATs.
 
-Phase 5, fourth part: hardening, process groups and global names.
+### Unwatch, process groups and global names
 
 - Added `ActorRef.unwatch(watcher)` and `ActorContext.unwatch(actor)`. The
   context form also drops a `Terminated` from that actor still in the
@@ -264,7 +332,7 @@ Phase 5, fourth part: hardening, process groups and global names.
 - TCP heartbeats are still not done: a silent, still-open TCP connection is
   not detected (libp2p's keep-alive does detect it).
 
-Phase 5, fifth part: discovery, and phones.
+### Discovery, and phones
 
 - **A reference brings its node's addresses.** On a transport that is an
   `AddressBook` (new interface; `Libp2pTransport` is one), a reference sent
@@ -292,6 +360,45 @@ Phase 5, fifth part: discovery, and phones.
   group, every check passing over relay and direct links, background and
   return, Wi-Fi on and off, 21 idle minutes. Results in the
   `dactor_libp2p` README ("On phones").
+
+### Messages, senders, applications and behaviours
+
+- **An application whose root actor ends is noticed.** `Application` has a
+  `restart` type, as in OTP: `temporary` (the default), `transient` or
+  `permanent`. When a root ends on its own, its dependents are stopped and
+  `stopped()` runs; a `permanent` application, or a `transient` one that
+  ended abnormally, then stops every application. Each case is reported on
+  the new `ApplicationController.exits` stream as an `ApplicationExit`.
+  Stops made through the controller are not reported.
+- **`GenStatem` event and generic timeouts.** `eventTimeout:` on a
+  transition calls `onEventTimeout` unless any message arrives first.
+  `timeouts: {name: duration}` sets named timeouts that survive changes of
+  state and call `onGenericTimeout(name, state, data)`; setting a name again
+  restarts it and `null` cancels it. `halt` cancels all of them.
+- **Typed `GenStatem` replies.** `reply:` takes `request.answer(value)`,
+  where `request` mixes in `Call<R>` and `value` must be an `R`, so a reply
+  of the wrong type does not compile.
+- **`GenServer.handleContinue`**, after OTP's `handle_continue`. `init` or a
+  handler calls `continueWith(arg)`, and `handleContinue(arg, state)` runs
+  before the next message. From `init` it runs after `spawn` has returned;
+  from `handleCall`, after the reply has gone.
+- **Messages are plain values.** `ActorRef.tell(Object?)` and
+  `ask<T>(Object?, [timeout])`: `onMessage` receives exactly what was told.
+  The `Message` interface is gone. `LocalMessage`, `AskableMessage` and
+  `AskableResponse` are deprecated; a `LocalMessage` told is unwrapped to its
+  payload. `Mailbox` is no longer exported.
+- **Senders cannot be forged.** `tell` has no `sender:`. The
+  runtime stamps the actor whose code is telling, or none outside any
+  actor, and timer messages have none. `context.forward(target, message)`
+  passes a message on with its original sender, which the router now uses.
+  A `Terminated` or `ExitSignal` told by anyone but the runtime is dropped
+  to the dead letters. Ask correlation ids are made by the runtime.
+- New library `package:dactor/spi.dart`, for transports, bridges and tests:
+  `sendAs(sender, () => ref.tell(m))`, `tellSystem(ref, Terminated(...))`,
+  and `currentSender` for an `ActorRef` written outside dactor.
+  `dactor_remote` uses it.
+- `dactor_lints` checks what is given to `tell`, `ask`, `forward` and a
+  `TypedRef`'s `tell` and `call`, as well as `LocalMessage(payload:)`.
 
 ## 1.3.0
 
