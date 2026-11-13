@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dactor/src/actor_ref.dart';
 
 /// A message to subscribe to events of a specific type.
+@Deprecated('Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
 class Subscribe<T> {
   final ActorRef subscriber;
   final Type eventType;
@@ -14,6 +15,7 @@ class Subscribe<T> {
 }
 
 /// A message to unsubscribe from events of a specific type.
+@Deprecated('Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
 class Unsubscribe<T> {
   final ActorRef subscriber;
   final Type eventType;
@@ -25,6 +27,7 @@ class Unsubscribe<T> {
 }
 
 /// A message to publish an event to all subscribers.
+@Deprecated('Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
 class Publish<T> {
   final T event;
 
@@ -35,6 +38,7 @@ class Publish<T> {
 }
 
 /// Represents an active event subscription.
+@Deprecated('Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
 class EventSubscription {
   final ActorRef subscriber;
   final Type eventType;
@@ -60,11 +64,16 @@ class EventSubscription {
 
 /// The event bus manages event subscriptions and routing.
 ///
-/// This implementation provides type-safe event publishing and subscription
-/// following the actor model principles. Events are delivered asynchronously
-/// to all registered subscribers.
+/// An actor subscribed to a type receives every published event that is an
+/// instance of it, subtypes included, as an ordinary message. Matching is on
+/// the event itself, not on the type argument given to [publish], and an
+/// actor subscribed to several matching types gets the event once.
 class EventBus {
   final Map<Type, Set<ActorRef>> _subscriptions = {};
+
+  /// For each subscribed type, whether an event is an instance of it.
+  final Map<Type, bool Function(Object? event)> _matchers = {};
+  bool _disposed = false;
   final Map<ActorRef, Set<Type>> _subscriberTypes = {};
   final StreamController<EventBusEvent> _eventController =
       StreamController.broadcast();
@@ -77,14 +86,16 @@ class EventBus {
   /// The subscriber will receive all events of type [T] and its subtypes.
   /// Multiple subscriptions to the same type by the same actor are idempotent.
   void subscribe<T>(ActorRef subscriber) {
+    if (_disposed) return;
     final eventType = T;
+    _matchers.putIfAbsent(eventType, () => (event) => event is T);
     final wasAdded = _subscriptions
         .putIfAbsent(eventType, () => <ActorRef>{})
         .add(subscriber);
     _subscriberTypes.putIfAbsent(subscriber, () => <Type>{}).add(eventType);
 
     // Only emit event if this was a new subscription
-    if (wasAdded) {
+    if (wasAdded && _eventController.hasListener) {
       _eventController.add(EventBusEvent.subscribed(subscriber, eventType));
     }
   }
@@ -95,6 +106,7 @@ class EventBus {
     final wasRemoved = _subscriptions[eventType]?.remove(subscriber) ?? false;
     if (_subscriptions[eventType]?.isEmpty == true) {
       _subscriptions.remove(eventType);
+      _matchers.remove(eventType);
     }
 
     _subscriberTypes[subscriber]?.remove(eventType);
@@ -103,18 +115,18 @@ class EventBus {
     }
 
     // Only emit event if something was actually removed
-    if (wasRemoved) {
+    if (wasRemoved && _eventController.hasListener) {
       _eventController.add(EventBusEvent.unsubscribed(subscriber, eventType));
     }
   }
 
   /// Publish an event to all subscribers.
   ///
-  /// The event will be delivered to all actors subscribed to type [T]
-  /// and any of its supertypes.
+  /// The event is delivered to every actor subscribed to its type or to any
+  /// of its supertypes, once each. After [dispose] it is dropped.
   void publish<T>(T event) {
-    final eventType = T;
-    final subscribers = _getSubscribersForType(eventType);
+    if (_disposed) return;
+    final subscribers = _subscribersFor(event);
 
     for (final subscriber in subscribers) {
       try {
@@ -125,14 +137,20 @@ class EventBus {
       }
     }
 
-    _eventController
-        .add(EventBusEvent.published(eventType, event, subscribers.length));
+    if (_eventController.hasListener) {
+      _eventController
+          .add(EventBusEvent.published(T, event, subscribers.length));
+    }
   }
 
-  /// Get all subscribers for a given event type.
-  /// Only exact type matching is supported.
-  Set<ActorRef> _getSubscribersForType(Type eventType) {
-    return Set.of(_subscriptions[eventType] ?? {});
+  /// Every actor subscribed to a type [event] is an instance of. A copy, so
+  /// that a subscriber can unsubscribe while it is being told.
+  Set<ActorRef> _subscribersFor(Object? event) {
+    final found = <ActorRef>{};
+    _subscriptions.forEach((type, subscribers) {
+      if (_matchers[type]!(event)) found.addAll(subscribers);
+    });
+    return found;
   }
 
   /// Remove all subscriptions for a given actor.
@@ -144,12 +162,15 @@ class EventBus {
         _subscriptions[eventType]?.remove(actor);
         if (_subscriptions[eventType]?.isEmpty == true) {
           _subscriptions.remove(eventType);
+          _matchers.remove(eventType);
         }
       }
       _subscriberTypes.remove(actor);
 
-      _eventController
-          .add(EventBusEvent.cleanup(actor, subscribedTypes.length));
+      if (_eventController.hasListener) {
+        _eventController
+            .add(EventBusEvent.cleanup(actor, subscribedTypes.length));
+      }
     }
   }
 
@@ -167,7 +188,10 @@ class EventBus {
 
   /// Dispose of the event bus and clean up resources.
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _subscriptions.clear();
+    _matchers.clear();
     _subscriberTypes.clear();
     _eventController.close();
   }

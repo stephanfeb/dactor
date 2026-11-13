@@ -238,6 +238,8 @@ class _ActorInfo {
   Actor get actor => inc.actor;
 }
 
+/// The actor system that runs every actor on the current isolate. What
+/// `ActorSystem.create` returns.
 // Never copied into another isolate by accident: a message or closure that
 // holds one fails to send instead.
 @pragma('vm:isolate-unsendable')
@@ -630,7 +632,12 @@ class LocalActorSystem implements ActorSystem {
       identical(info.inc, inc);
 
   void _disposeTimers(Actor actor) {
-    final timers = actor.context.timers;
+    final context = actor.context;
+    if (context is _ActorContext) {
+      context.closeTimers();
+      return;
+    }
+    final timers = context.timers;
     if (timers is DactorTimerScheduler) {
       timers.dispose();
     }
@@ -1630,12 +1637,27 @@ class _ActorContext implements ActorContext, BehaviourContext {
   final LocalActorSystem system;
   @override
   ActorRef? sender;
-  @override
-  late final TimerScheduler timers;
+  DactorTimerScheduler? _timers;
+  bool _timersClosed = false;
 
-  _ActorContext(this.self, this.system) {
-    timers = DactorTimerScheduler(self);
+  /// Made on first use: most actors never start a timer.
+  @override
+  TimerScheduler get timers {
+    var timers = _timers;
+    if (timers == null) {
+      _timers = timers = DactorTimerScheduler(self);
+      if (_timersClosed) timers.dispose();
+    }
+    return timers;
   }
+
+  /// Cancels this incarnation's timers, and any it asks for later.
+  void closeTimers() {
+    _timersClosed = true;
+    _timers?.dispose();
+  }
+
+  _ActorContext(this.self, this.system);
 
   @override
   Future<ActorRef> spawn<T extends Actor>(

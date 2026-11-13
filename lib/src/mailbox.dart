@@ -24,6 +24,7 @@ final class Envelope {
   String get traceId => 'm$id';
 }
 
+/// An actor's queue of waiting messages. Internal to the actor system.
 class Mailbox {
   final String actorId;
   final void Function(Mailbox mailbox) _onSchedule;

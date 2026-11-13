@@ -1,3 +1,24 @@
+## 2.3.0
+
+- **The event bus delivers subtypes**, as its documentation always said. An
+  actor subscribed to a type receives every published event that is an
+  instance of it, matched on the event rather than on the type argument of
+  `publish`; an actor with several matching subscriptions gets each event
+  once. An actor subscribed to a supertype such as `Object` now receives
+  more than before. `publish` after `dispose` is dropped instead of
+  throwing, and monitoring events are built only while `events` has a
+  listener.
+- **`DeadLetterQueue.letters`**: a stream of dead letters as they arrive.
+- **Tagged metrics in `InMemoryMetricsCollector`.** `getCounter` and
+  `getGauge` take `tags:` to read one series, such as one actor's
+  `mailbox.size`; without tags they return what they did before.
+- **`AskConfig.retryIf`**: a predicate deciding which errors are retried,
+  for matching subtypes. `retryableErrorTypes` still matches exact types.
+- Watching an actor twice gives one `Terminated`, not two.
+- An actor's timer scheduler is created on first use.
+- Deprecated: `Subscribe`, `Unsubscribe`, `Publish` and `EventSubscription`,
+  which the event bus never used. They will be removed in 3.0.
+
 ## 2.2.1
 
 - **README corrected.** New "Execution Model" section: one isolate, one

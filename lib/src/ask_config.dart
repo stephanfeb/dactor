@@ -26,8 +26,17 @@ class AskConfig {
   /// can detect and deduplicate retries.
   final bool enableRetries;
 
-  /// Types of errors that should trigger a retry (by default, only TimeoutException).
+  /// Types of errors that should trigger a retry (by default, only
+  /// TimeoutException).
+  ///
+  /// An error matches only if its runtime type is exactly one of these, not
+  /// a subtype. To match subtypes, use [retryIf].
   final Set<Type> retryableErrorTypes;
+
+  /// Decides whether an error should trigger a retry, for example
+  /// `(e) => e is IOException`. When set, it is used instead of
+  /// [retryableErrorTypes].
+  final bool Function(Object error)? retryIf;
 
   AskConfig({
     this.defaultTimeout = const Duration(seconds: 5),
@@ -37,6 +46,7 @@ class AskConfig {
     this.maxBackoffDuration = const Duration(seconds: 10),
     this.enableRetries = false,
     Set<Type>? retryableErrorTypes,
+    this.retryIf,
   }) : retryableErrorTypes = retryableErrorTypes ?? {TimeoutException};
 
   /// Creates a development-friendly configuration with longer timeouts and
@@ -80,7 +90,9 @@ class AskConfig {
 
   /// Checks if an error type is retryable according to this configuration.
   bool isRetryableError(Object error) {
-    return retryableErrorTypes.any((type) => error.runtimeType == type);
+    final retryIf = this.retryIf;
+    if (retryIf != null) return retryIf(error);
+    return retryableErrorTypes.contains(error.runtimeType);
   }
 
   @override

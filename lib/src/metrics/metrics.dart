@@ -40,12 +40,19 @@ class NoOpMetricsCollector implements MetricsCollector {
 
 /// A simple in-memory metrics collector for testing and basic monitoring.
 ///
-/// Counters and gauges are one value per name. Timings are kept per name in a
-/// bounded window of the most recent [maxTimings] samples so that a
-/// long-running system cannot grow without limit.
+/// Counters and gauges are kept per name and, for those recorded with tags,
+/// also per name and tags: `getCounter('dead_letters')` is the total, and
+/// `getGauge('mailbox.size', tags: {'actorId': 'a'})` is one actor's mailbox.
+/// Timings are kept per name in a bounded window of the most recent
+/// [maxTimings] samples so that a long-running system cannot grow without
+/// limit. Tagged series are not bounded: there is one per distinct set of
+/// tags, so with per-actor tags one per actor ever seen. This collector is
+/// meant for tests and local debugging.
 class InMemoryMetricsCollector implements MetricsCollector {
   final _counters = <String, int>{};
   final _gauges = <String, double>{};
+  final _taggedCounters = <String, int>{};
+  final _taggedGauges = <String, double>{};
   final _timings = <String, Queue<Duration>>{};
 
   /// Maximum number of timing samples retained per metric name.
@@ -60,16 +67,29 @@ class InMemoryMetricsCollector implements MetricsCollector {
   @override
   void increment(String name, {int count = 1, Map<String, String>? tags}) {
     _counters.update(name, (value) => value + count, ifAbsent: () => count);
+    if (tags != null && tags.isNotEmpty) {
+      _taggedCounters.update(_series(name, tags), (value) => value + count,
+          ifAbsent: () => count);
+    }
   }
 
   @override
   void decrement(String name, {int count = 1, Map<String, String>? tags}) {
-    _counters.update(name, (value) => value - count, ifAbsent: () => -count);
+    increment(name, count: -count, tags: tags);
   }
 
   @override
   void gauge(String name, double value, {Map<String, String>? tags}) {
     _gauges[name] = value;
+    if (tags != null && tags.isNotEmpty) {
+      _taggedGauges[_series(name, tags)] = value;
+    }
+  }
+
+  /// The key of one tagged series: the name and the tags, sorted by key.
+  static String _series(String name, Map<String, String> tags) {
+    final keys = tags.keys.toList()..sort();
+    return '$name{${keys.map((k) => '$k=${tags[k]}').join(',')}}';
   }
 
   @override
@@ -81,11 +101,21 @@ class InMemoryMetricsCollector implements MetricsCollector {
     }
   }
 
-  /// Gets the current value of a counter.
-  int getCounter(String name) => _counters[name] ?? 0;
+  /// Gets the current value of a counter: the total over all tags, or with
+  /// [tags], only what was recorded with exactly those tags.
+  int getCounter(String name, {Map<String, String>? tags}) =>
+      (tags == null || tags.isEmpty
+          ? _counters[name]
+          : _taggedCounters[_series(name, tags)]) ??
+      0;
 
-  /// Gets the current value of a gauge.
-  double? getGauge(String name) => _gauges[name];
+  /// Gets the current value of a gauge: the last value recorded under
+  /// [name] whatever its tags, or with [tags], the last recorded with exactly
+  /// those tags.
+  double? getGauge(String name, {Map<String, String>? tags}) =>
+      tags == null || tags.isEmpty
+          ? _gauges[name]
+          : _taggedGauges[_series(name, tags)];
 
   /// Gets the retained timing samples for a metric, oldest first.
   List<Duration> getTimings(String name) =>
@@ -95,6 +125,8 @@ class InMemoryMetricsCollector implements MetricsCollector {
   void clear() {
     _counters.clear();
     _gauges.clear();
+    _taggedCounters.clear();
+    _taggedGauges.clear();
     _timings.clear();
   }
 }

@@ -31,7 +31,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dactor: ^2.2.0
+  dactor: ^2.3.0
 ```
 
 ### Basic Example
@@ -218,10 +218,13 @@ final system = ActorSystem.create(ActorSystemConfig(
 final system = ActorSystem.create(ActorSystemConfig(
   askConfig: AskConfig(
     defaultTimeout: Duration(seconds: 3),
+    enableRetries: true,
     maxRetries: 2,
     retryBackoffBase: Duration(milliseconds: 100),
     retryBackoffMultiplier: 2.0,
     maxBackoffDuration: Duration(seconds: 5),
+    // Which errors are worth a retry (default: a TimeoutException)
+    retryIf: (error) => error is TimeoutException || error is IOException,
   ),
 ));
 
@@ -871,7 +874,7 @@ class RateLimiterActor extends Actor {
 
 ## 📡 Event Bus for Event-Driven Architecture
 
-The event bus enables publish-subscribe messaging patterns for building event-driven applications:
+The event bus enables publish-subscribe messaging patterns for building event-driven applications. An actor subscribed to a type receives every published event that is an instance of it, subtypes included: subscribe to a sealed base class to get all of its cases. Matching is on the event itself, not on the type argument given to `publish`, and an actor subscribed to several matching types gets each event once.
 
 ### Basic Event Publishing and Subscription
 
@@ -1070,8 +1073,8 @@ print('Total subscriptions: ${system.eventBus.subscriptionCount}');
 ### Event Bus Features
 
 - **Type-Safe**: Events are strongly typed using Dart's type system
+- **Subtypes Included**: A subscription to a type also receives its subtypes
 - **Automatic Cleanup**: Subscriptions are automatically removed when actors stop
-- **High Performance**: Efficient O(1) routing for direct type matches
 - **Memory Safe**: No memory leaks from orphaned subscriptions
 - **Observable**: Built-in monitoring stream for debugging and metrics
 
@@ -1095,6 +1098,9 @@ print('Actors spawned: ${metrics.getCounter('actors.spawned')}');
 print('Active actors: ${metrics.getGauge('actors.active')}');
 print('Messages processed: ${metrics.getCounter('messages.processed')}');
 print('Processing times: ${metrics.getTimings('messages.processing_time')}');
+
+// One actor's share of a metric recorded with tags
+print('Mailbox of a: ${metrics.getGauge('mailbox.size', tags: {'actorId': 'a'})}');
 ```
 
 Available metrics:
@@ -1128,6 +1134,11 @@ if (deadLetter != null) {
   print('Undelivered message: ${deadLetter.message}');
   print('Intended recipient: ${deadLetter.recipient}');
 }
+
+// Or follow them as they arrive
+system.deadLetterQueue.letters.listen((letter) {
+  print('Dead letter: ${letter.message} to ${letter.recipient.id}');
+});
 ```
 
 ## 🎮 Real-World Examples

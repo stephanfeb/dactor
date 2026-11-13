@@ -152,9 +152,8 @@ void main() {
 
     test('should publish and deliver events to subscribers', () async {
       // Arrange
-      final orderActor = await system.spawn('order-actor', () => OrderActor());
-      final paymentActor =
-          await system.spawn('payment-actor', () => PaymentActor());
+      await system.spawn('order-actor', () => OrderActor());
+      await system.spawn('payment-actor', () => PaymentActor());
       final publisher = await system.spawn('publisher', () => PublisherActor());
 
       // Wait for actors to start and subscribe
@@ -168,10 +167,6 @@ void main() {
       await Future.delayed(Duration(milliseconds: 100));
 
       // Assert
-      final orderActorInstance = (system as LocalActorSystem)
-          .spawnAndGetActor('order-actor-temp', () => OrderActor())
-          .then((result) => result.actor);
-
       // Verify event bus has subscribers
       expect(system.eventBus.subscriberCount, greaterThan(0));
       expect(system.eventBus.subscriptionCount, greaterThan(0));
@@ -181,7 +176,7 @@ void main() {
       // Arrange
       final actor =
           await system.spawn('test-actor', () => UnsubscribingActor());
-      final publisher = await system.spawn('publisher', () => PublisherActor());
+      await system.spawn('publisher', () => PublisherActor());
 
       // Wait for actor to start and subscribe
       await Future.delayed(Duration(milliseconds: 100));
@@ -217,8 +212,8 @@ void main() {
 
     test('should support multiple subscribers for same event type', () async {
       // Arrange
-      final actor1 = await system.spawn('actor1', () => OrderActor());
-      final actor2 = await system.spawn('actor2', () => OrderActor());
+      await system.spawn('actor1', () => OrderActor());
+      await system.spawn('actor2', () => OrderActor());
       final publisher = await system.spawn('publisher', () => PublisherActor());
 
       // Wait for actors to start and subscribe
@@ -285,7 +280,7 @@ void main() {
 
     test('should handle direct event bus API', () async {
       // Arrange
-      final actor = await system.spawn('direct-actor', () => OrderActor());
+      await system.spawn('direct-actor', () => OrderActor());
       await Future.delayed(Duration(milliseconds: 100));
 
       // Act - use direct event bus API
@@ -298,7 +293,7 @@ void main() {
 
     test('should maintain subscription state correctly', () async {
       // Arrange
-      final actor = await system.spawn('state-actor', () => OrderActor());
+      await system.spawn('state-actor', () => OrderActor());
       await Future.delayed(Duration(milliseconds: 100));
 
       // Act & Assert - check initial state

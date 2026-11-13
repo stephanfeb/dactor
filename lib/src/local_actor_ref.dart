@@ -13,6 +13,8 @@ import 'package:dactor/src/tracing/tracing.dart';
 import 'package:dactor/src/ask_config.dart';
 import 'package:dactor/src/system_messages.dart';
 
+/// The `ActorRef` of an actor in a [LocalActorSystem]. Get one from `spawn`
+/// rather than constructing it.
 // Never copied into another isolate by accident: a message or closure that
 // holds one fails to send instead.
 @pragma('vm:isolate-unsendable')
@@ -23,7 +25,8 @@ class LocalActorRef implements ActorRef {
   final DeadLetterQueue _deadLetterQueue;
   final TraceCollector _tracer;
   final AskConfig _askConfig;
-  final _watchers = <ActorRef>[];
+  /// A set: watching twice still means one `Terminated`.
+  final _watchers = <ActorRef>{};
   bool _isAlive = true;
   static int _asks = 0;
 
@@ -216,7 +219,7 @@ class LocalActorRef implements ActorRef {
   }
 
   @override
-  void unwatch(ActorRef watcher) => _watchers.removeWhere((w) => w == watcher);
+  void unwatch(ActorRef watcher) => _watchers.remove(watcher);
 
   void stop([ExitReason reason = const NormalExit()]) {
     if (!_isAlive) return;
@@ -238,7 +241,7 @@ class _TemporaryActorRef<T> implements ActorRef {
   _TemporaryActorRef(this._completer, [this._attemptNumber = 0]);
 
   @override
-  String get id => 'temp_${_attemptNumber}_${_completer.hashCode}';
+  late final String id = 'temp_${_attemptNumber}_${_completer.hashCode}';
 
   @override
   bool get isAlive => !_completer.isCompleted;
