@@ -139,13 +139,15 @@ An actor that hands work on, such as a router, uses `context.forward(target, mes
 
 `Terminated` and `ExitSignal` come only from the runtime. One told in the ordinary way is dropped to the dead letters.
 
-Code that is not an actor but carries messages for one, such as a transport, a bridge or a test, can name a sender with `sendAs` from `package:dactor/spi.dart`:
+Code that is not an actor but carries messages for one, such as a transport or a bridge, can name a sender with `sendAs` from `package:dactor/spi.dart`:
 
 ```dart
 import 'package:dactor/spi.dart';
 
-sendAs(probe.ref, () => actor.tell('request'));
+sendAs(replyTo, () => actor.tell('request'));
 ```
+
+In tests, `probe.send(actor, message)` from `dactor_test` does the same with a probe as the sender.
 
 `LocalMessage`, `AskableMessage` and `AskableResponse` are deprecated and will be removed in 3.0. A `LocalMessage` that is told is unwrapped to its payload, and the sender it carries is ignored.
 
@@ -1289,6 +1291,9 @@ final msg = await probe.expectMsgType<MyCustomType>(timeout: Duration(seconds: 3
 // Access the last received message
 final lastMsg = probe.lastMessage;
 
+// Send a message with the probe as the sender
+probe.send(actor, 'request');
+
 // Reply to the sender of the last message
 probe.reply('response_payload');
 ```
@@ -1314,8 +1319,8 @@ test('should respond with pong', () async {
   // 2. Spawn the actor under test
   final actor = await system.spawn('my-actor', () => MyActor());
   
-  // 3. Send a message from the probe to the actor (sendAs is in package:dactor/spi.dart)
-  sendAs(probe.ref, () => actor.tell('ping'));
+  // 3. Send a message from the probe to the actor
+  probe.send(actor, 'ping');
   
   // 4. Assert that the probe receives the expected reply
   await probe.expectMsg('pong');
@@ -1331,7 +1336,7 @@ test('should receive typed message', () async {
   final probe = await system.createProbe();
   final actor = await system.spawn('test', () => MyActor());
   
-  sendAs(probe.ref, () => actor.tell('get_number'));
+  probe.send(actor, 'get_number');
   
   // Expect a message of specific type and get it back
   final number = await probe.expectMsgType<int>(timeout: Duration(seconds: 2));
@@ -1359,7 +1364,7 @@ test('should handle replies from probe', () async {
   final probe = await system.createProbe();
   final actor = await system.spawn('asker', () => AskerActor());
 
-  sendAs(probe.ref, () => actor.tell('ask_and_reply'));
+  probe.send(actor, 'ask_and_reply');
 
   // Expect the question from the actor
   await probe.expectMsg('question');
@@ -1374,7 +1379,7 @@ test('should handle replies from probe', () async {
 
 #### Testing Best Practices
 
-1. **Make the probe the sender**: test code runs outside any actor, so use `sendAs(probe.ref, () => actor.tell(message))` from `package:dactor/spi.dart`
+1. **Make the probe the sender**: test code runs outside any actor, so `actor.tell(message)` has no sender. Use `probe.send(actor, message)` and replies come back to the probe
 
 2. **Use timeouts for reliability**: Always specify timeouts for `expectMsg` and `expectMsgType` in production tests
 
@@ -1432,7 +1437,6 @@ To enable tracing, configure your `TestActorSystem` with an `InMemoryTraceCollec
 
 ```dart
 import 'package:dactor/dactor.dart';
-import 'package:dactor/spi.dart';
 import 'package:dactor_test/dactor_test.dart';
 import 'package:test/test.dart';
 
@@ -1464,7 +1468,7 @@ void main() {
       final actor = await system.spawn('test', () => HelloActor());
 
       // Send a message with the probe as the sender
-      sendAs(probe.ref, () => actor.tell('hello'));
+      probe.send(actor, 'hello');
 
       // Wait for messages to be processed
       await probe.expectMsg('world');

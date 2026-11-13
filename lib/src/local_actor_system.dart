@@ -978,6 +978,8 @@ class LocalActorSystem implements ActorSystem {
         info.mailbox.takeFirstWhere((message) => pending.test(message.payload));
     if (match == null) return false;
     info.pendingReceive = null;
+    // From here on the handler answers the message it received.
+    (info.inc.actor.context as _ActorContext).sender = match.sender;
     pending.done.complete(match.payload);
     return true;
   }

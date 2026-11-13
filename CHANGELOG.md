@@ -1,3 +1,12 @@
+## 2.0.1
+
+- **Fixed: `context.receive` left `context.sender` pointing at the sender of
+  the message being handled.** After `receive` returns a message, `sender`
+  is that message's sender, so the handler can answer it. Keep the earlier
+  sender in a variable if the handler still needs it.
+- README: tests use `probe.send(actor, message)` from `dactor_test` 2.0
+  instead of `sendAs`.
+
 ## 2.0.0
 
 Dactor 2.0 brings the actor model closer to Erlang/OTP: a zone per actor,

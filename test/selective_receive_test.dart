@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dactor/dactor.dart';
+import 'package:dactor/spi.dart';
 import 'package:test/test.dart';
 
 final _log = <String>[];
@@ -40,6 +41,24 @@ class Waiter extends Actor {
         _log.add('$message');
     }
   }
+}
+
+/// Waits for an Ack, thanks whoever sent it, and then answers whoever asked.
+class Collector extends Actor {
+  @override
+  Future<void> onMessage(dynamic message) async {
+    if (message != 'collect') return;
+    final asker = context.sender;
+    final ack = await context.receive<Ack>();
+    context.sender?.tell('thanks ${ack.id}');
+    asker?.tell('collected ${ack.id}');
+  }
+}
+
+/// Logs what it is told.
+class Recorder extends Actor {
+  @override
+  Future<void> onMessage(dynamic message) async => _log.add('$message');
 }
 
 void main() {
@@ -122,5 +141,16 @@ void main() {
     await system.stop(ref);
     expect(ref.isAlive, isFalse);
     expect(_log, isEmpty);
+  });
+
+  test('sender is the sender of the received message', () async {
+    final collector = await system.spawn('c', () => Collector());
+    final acker = await system.spawn('acker', () => Recorder());
+    final collected = collector.ask<String>('collect');
+    await settle();
+    sendAs(acker, () => collector.tell(Ack(3)));
+    expect(await collected, 'collected 3');
+    await settle();
+    expect(_log, ['thanks 3']);
   });
 }

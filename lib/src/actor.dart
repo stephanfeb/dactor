@@ -78,6 +78,10 @@ abstract class ActorContext {
   ///
   /// Fails with a [TimeoutException] if nothing matches within [timeout].
   ///
+  /// Once a message is received, [sender] is the sender of that message, not
+  /// of the one being handled. Keep the earlier sender in a variable first if
+  /// the handler still needs to answer it.
+  ///
   /// Use it sparingly. Every call scans the whole mailbox, so on an actor
   /// with a backlog it is slow, and an actor waiting here handles nothing
   /// else.
