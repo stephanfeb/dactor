@@ -18,7 +18,7 @@ Dactor provides a robust actor system for building concurrent, fault-tolerant, a
 - 🧩 **Typed Behaviours**: `GenServer`, `GenStatem` and `TypedRef<M>` with compile-time checked messages
 - 📡 **Event Bus**: Publish-subscribe messaging for event-driven architectures
 - ⏰ **Actor Timers**: Schedule messages with single-shot, fixed-delay, and fixed-rate timers
-- ⚡ **High Performance**: about 900K messages/sec to one actor or through a pool, about 10 µs per ask
+- ⚡ **High Performance**: about 1.3M messages/sec to one actor, more through a pool, about 10 µs per ask
 - 📊 **Built-in Observability**: Comprehensive metrics, tracing, and monitoring
 - 🎛️ **Actor Pooling**: Scale with worker pools and round-robin routing
 - 💾 **Memory Efficient**: about 1.7 KB per idle actor
@@ -1227,7 +1227,7 @@ final system = ActorSystem.create(config);
 
 Dactor is designed for high performance:
 
-- **Throughput**: about 900,000 messages/second to one actor, and about the same through a round-robin pool
+- **Throughput**: about 1.3 million messages/second to one actor, and 1.2 to 1.8 million through a round-robin pool, with metrics and tracing off (the default)
 - **Latency**: about 10 μs for an `ask` round trip
 - **Memory**: about 1.7 KB per idle actor
 - **Scalability**: Supports thousands of concurrent actors
@@ -1238,9 +1238,9 @@ Run the benchmarks:
 dart test test/benchmark/
 ```
 
-The test files time one cold run each. For steadier figures, `tool/probes/pool_throughput.dart` in the repository warms up and alternates between one actor and pools of 1, 4 and 16 workers. On an Apple silicon laptop with Dart 3.11:
+The test files time one cold run each. A metrics or trace collector costs throughput: each message then records events, a gauge and a timing. For steadier figures, `tool/probes/pool_throughput.dart` in the repository warms up and alternates between one actor and pools of 1, 4 and 16 workers. On an Apple silicon laptop with Dart 3.11:
 ```
-single 893k  pool(1) 856k  pool(4) 978k  pool(16) 1013k
+single 1326k  pool(1) 1252k  pool(4) 1705k  pool(16) 1858k
 ```
 
 ## 🧪 Testing Your Actors

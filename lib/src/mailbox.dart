@@ -30,10 +30,19 @@ class Mailbox {
       _onGauge;
   final _queue = Queue<Envelope>();
 
+  /// The gauge's tags, built once rather than for every message.
+  late final Map<String, String> _tags = Map.unmodifiable({'actorId': actorId});
+
   /// Messages from the actor system itself. They are delivered before
   /// anything in [_queue], so a backlog cannot hold up supervision.
   Queue<Envelope>? _system;
   bool _isDisposed = false;
+
+  /// Set by the actor system: the mailbox waits in its run queue.
+  bool scheduled = false;
+
+  /// Set by the actor system: the actor is handling one of its messages.
+  bool processing = false;
 
   Mailbox(
     this.actorId,
@@ -45,8 +54,7 @@ class Mailbox {
   void enqueue(Envelope message) {
     if (!_isDisposed) {
       _queue.add(message);
-      _onGauge?.call('mailbox.size', _queue.length.toDouble(),
-          tags: {'actorId': actorId});
+      _onGauge?.call('mailbox.size', _queue.length.toDouble(), tags: _tags);
       _onSchedule(this);
     }
   }
@@ -55,8 +63,7 @@ class Mailbox {
   void enqueueFirst(Envelope message) {
     if (!_isDisposed) {
       _queue.addFirst(message);
-      _onGauge?.call('mailbox.size', _queue.length.toDouble(),
-          tags: {'actorId': actorId});
+      _onGauge?.call('mailbox.size', _queue.length.toDouble(), tags: _tags);
       _onSchedule(this);
     }
   }
@@ -76,8 +83,7 @@ class Mailbox {
     }
     if (_queue.isNotEmpty) {
       final message = _queue.removeFirst();
-      _onGauge?.call('mailbox.size', _queue.length.toDouble(),
-          tags: {'actorId': actorId});
+      _onGauge?.call('mailbox.size', _queue.length.toDouble(), tags: _tags);
       return message;
     }
     return null;

@@ -27,8 +27,13 @@ class LocalActorRef implements ActorRef {
   bool _isAlive = true;
   static int _asks = 0;
 
+  /// False for a [NoOpTraceCollector], so that no trace event is built for
+  /// nothing.
+  final bool _tracing;
+
   LocalActorRef(this.id, this._mailbox, this._deadLetterQueue, this._tracer,
-      this._askConfig);
+      this._askConfig)
+      : _tracing = _tracer is! NoOpTraceCollector;
 
   @override
   bool get isAlive => _isAlive;
@@ -56,7 +61,9 @@ class LocalActorRef implements ActorRef {
         if (target != null) return target.tell(payload);
       }
       final envelope = Envelope(payload, sender);
-      _tracer.record(TraceEvent(envelope.traceId, 'sent', this, payload));
+      if (_tracing) {
+        _tracer.record(TraceEvent(envelope.traceId, 'sent', this, payload));
+      }
       _mailbox.enqueue(envelope);
     } else {
       _deadLetterQueue.enqueue(DeadLetter(payload, sender, this));
@@ -108,45 +115,51 @@ class LocalActorRef implements ActorRef {
         attemptCount++;
 
         if (!effectiveEnableRetries || attemptCount > effectiveMaxRetries) {
-          _tracer.record(TraceEvent(
-            correlationId,
-            'ask_failed_final',
-            this,
-            {
-              'error': error.toString(),
-              'attempts': attemptCount,
-              'timeout': effectiveTimeout.toString(),
-            },
-          ));
+          if (_tracing) {
+            _tracer.record(TraceEvent(
+              correlationId,
+              'ask_failed_final',
+              this,
+              {
+                'error': error.toString(),
+                'attempts': attemptCount,
+                'timeout': effectiveTimeout.toString(),
+              },
+            ));
+          }
           rethrow;
         }
 
         if (!_askConfig.isRetryableError(error)) {
-          _tracer.record(TraceEvent(
-            correlationId,
-            'ask_failed_non_retryable',
-            this,
-            {
-              'error': error.toString(),
-              'error_type': error.runtimeType.toString(),
-            },
-          ));
+          if (_tracing) {
+            _tracer.record(TraceEvent(
+              correlationId,
+              'ask_failed_non_retryable',
+              this,
+              {
+                'error': error.toString(),
+                'error_type': error.runtimeType.toString(),
+              },
+            ));
+          }
           rethrow;
         }
 
         final backoffDuration = _askConfig.calculateBackoff(attemptCount);
 
-        _tracer.record(TraceEvent(
-          correlationId,
-          'ask_retry',
-          this,
-          {
-            'attempt': attemptCount,
-            'max_retries': effectiveMaxRetries,
-            'backoff_ms': backoffDuration.inMilliseconds,
-            'error': error.toString(),
-          },
-        ));
+        if (_tracing) {
+          _tracer.record(TraceEvent(
+            correlationId,
+            'ask_retry',
+            this,
+            {
+              'attempt': attemptCount,
+              'max_retries': effectiveMaxRetries,
+              'backoff_ms': backoffDuration.inMilliseconds,
+              'error': error.toString(),
+            },
+          ));
+        }
 
         if (backoffDuration > Duration.zero) {
           await Future.delayed(backoffDuration);
@@ -167,15 +180,17 @@ class LocalActorRef implements ActorRef {
     final completer = Completer<T>();
     final tempRef = _TemporaryActorRef<T>(completer, attemptNumber);
 
-    _tracer.record(TraceEvent(
-      correlationId,
-      'ask_attempt',
-      this,
-      {
-        'attempt': attemptNumber + 1,
-        'timeout_ms': timeout.inMilliseconds,
-      },
-    ));
+    if (_tracing) {
+      _tracer.record(TraceEvent(
+        correlationId,
+        'ask_attempt',
+        this,
+        {
+          'attempt': attemptNumber + 1,
+          'timeout_ms': timeout.inMilliseconds,
+        },
+      ));
+    }
 
     // The answer goes to the temporary reference, whoever is asking.
     Sending.as(tempRef, () => tell(message));

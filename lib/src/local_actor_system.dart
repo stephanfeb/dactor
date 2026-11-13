@@ -244,14 +244,17 @@ class LocalActorSystem implements ActorSystem {
   final _actors = <String, LocalActorRef>{};
   final _actorInfo = <String, _ActorInfo>{};
   final _activeMailboxes = Queue<Mailbox>();
-  final _scheduledMailboxes = <Mailbox>{};
-  final _processingActors = <String>{};
   late final DeadLetterQueue deadLetterQueue;
   late final EventBus _eventBus;
   @override
   final MetricsCollector metrics;
   @override
   final TraceCollector tracer;
+
+  /// False for the no-op collectors, so that the hot path builds no trace
+  /// events, gauge tags or stopwatches that nothing would read.
+  late final bool _tracing = tracer is! NoOpTraceCollector;
+  late final bool _measuring = metrics is! NoOpMetricsCollector;
   @override
   final LogCollector logger;
 
@@ -500,7 +503,8 @@ class LocalActorSystem implements ActorSystem {
     }
 
     final actor = actorFactory();
-    final mailbox = Mailbox(id, scheduleMailbox, onGauge: metrics.gauge);
+    final mailbox = Mailbox(id, scheduleMailbox,
+        onGauge: _measuring ? metrics.gauge : null);
     final actorRef =
         LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
     final info = _ActorInfo(
@@ -786,7 +790,7 @@ class LocalActorSystem implements ActorSystem {
         continue;
       }
       final mailbox = _activeMailboxes.removeFirst();
-      _scheduledMailboxes.remove(mailbox);
+      mailbox.scheduled = false;
       if (!_dispatch(mailbox, null)) continue;
       final after = _turnClock.elapsedMicroseconds;
 
@@ -845,7 +849,7 @@ class LocalActorSystem implements ActorSystem {
     metrics.increment('messages.processed');
     if (_pumped) _openTurn();
     final before = _turnClock.elapsedMicroseconds;
-    _processingActors.add(mailbox.actorId);
+    mailbox.processing = true;
     _processMessage(info, actorRef, message, crash: crash);
 
     // _processMessage returns at the handler's first suspension, so this
@@ -864,7 +868,7 @@ class LocalActorSystem implements ActorSystem {
     assert(!_pumped);
     _activeMailboxes.removeWhere((mailbox) {
       if (_isRunnable(mailbox)) return false;
-      _scheduledMailboxes.remove(mailbox);
+      mailbox.scheduled = false;
       return true;
     });
     return [for (final mailbox in _activeMailboxes) mailbox.actorId];
@@ -876,9 +880,10 @@ class LocalActorSystem implements ActorSystem {
   void step(String actorId, {StepFault Function(StepDelivery)? fault}) {
     assert(!_pumped);
     final mailbox = _actorInfo[actorId]?.mailbox;
-    if (mailbox == null || !_scheduledMailboxes.remove(mailbox)) {
+    if (mailbox == null || !mailbox.scheduled) {
       throw StateError('$actorId has nothing to run');
     }
+    mailbox.scheduled = false;
     _activeMailboxes.remove(mailbox);
     _sys(() => _dispatch(mailbox, fault));
   }
@@ -909,7 +914,7 @@ class LocalActorSystem implements ActorSystem {
   void _processMessage(
       _ActorInfo info, LocalActorRef actorRef, Envelope message,
       {bool crash = false}) {
-    final stopwatch = Stopwatch()..start();
+    final stopwatch = _measuring ? (Stopwatch()..start()) : null;
     // Pin the incarnation that handles this message; a restart during the
     // handler must not redirect the bookkeeping below to the replacement.
     final inc = info.inc;
@@ -922,12 +927,13 @@ class LocalActorSystem implements ActorSystem {
       if (finished) return;
       finished = true;
       inc.abandon = null;
-      stopwatch.stop();
-      metrics.timing('messages.processing_time', stopwatch.elapsed);
+      if (stopwatch != null) {
+        metrics.timing('messages.processing_time', stopwatch.elapsed);
+      }
       context.sender = null;
       // A receive the handler did not wait for ends with the handler.
       if (identical(info.inc, inc)) info.pendingReceive = null;
-      _processingActors.remove(mailbox.actorId);
+      mailbox.processing = false;
       inc.markIdle();
       if (!mailbox.isEmpty && !mailbox.isDisposed) {
         scheduleMailbox(mailbox);
@@ -943,7 +949,10 @@ class LocalActorSystem implements ActorSystem {
 
     final payload = _unwrapTick(message.payload);
     context.sender = message.sender;
-    tracer.record(TraceEvent(message.traceId, 'processed', actorRef, payload));
+    if (_tracing) {
+      tracer
+          .record(TraceEvent(message.traceId, 'processed', actorRef, payload));
+    }
     if (info.traced &&
         payload is! _SupervisionSignal &&
         payload is! _SysRequest) {
@@ -1057,7 +1066,7 @@ class LocalActorSystem implements ActorSystem {
   }
 
   void scheduleMailbox(Mailbox mailbox) {
-    if (_processingActors.contains(mailbox.actorId)) {
+    if (mailbox.processing) {
       // Busy, but perhaps busy waiting for exactly this message.
       final info = _actorInfo[mailbox.actorId];
       if (info != null && info.pendingReceive != null) {
@@ -1065,7 +1074,8 @@ class LocalActorSystem implements ActorSystem {
       }
       return;
     }
-    if (_scheduledMailboxes.add(mailbox)) {
+    if (!mailbox.scheduled) {
+      mailbox.scheduled = true;
       _activeMailboxes.add(mailbox);
       _wakeUpPump();
     }

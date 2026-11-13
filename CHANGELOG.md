@@ -7,6 +7,12 @@
   dropped before the actor sees it. This also covers selective `receive`.
 - Fixed: after an actor restarted, a tick queued by the failed incarnation
   reached the new one.
+- **Faster with the default collectors.** With the no-op metrics and trace
+  collectors, a message no longer builds trace events, gauge tags or a
+  stopwatch that nothing reads, and the pump tracks busy and scheduled
+  mailboxes with flags instead of sets. One actor: about 890k to 1.3M
+  msg/s; a pool of four: about 0.95M to 1.7M. A real collector still gets
+  everything it got before.
 
 ## 2.1.0
 
