@@ -2,7 +2,7 @@
 
 **A lightweight, high-performance actor model implementation for Dart**
 
-Dactor provides a robust actor system for building concurrent, fault-tolerant, and scalable applications in Dart. It implements the actor model with features like supervision trees, message passing, ask patterns with reliability, metrics, and pooling.
+Dactor provides a robust actor system for building concurrent, fault-tolerant applications in Dart. It implements the actor model with features like supervision trees, message passing, ask patterns with reliability, metrics, and pooling.
 
 [![Pub Version](https://img.shields.io/pub/v/dactor)](https://pub.dev/packages/dactor)
 [![Dart SDK](https://img.shields.io/badge/dart-%3E%3D3.5.1-blue)](https://dart.dev)
@@ -20,7 +20,7 @@ Dactor provides a robust actor system for building concurrent, fault-tolerant, a
 - ⏰ **Actor Timers**: Schedule messages with single-shot, fixed-delay, and fixed-rate timers
 - ⚡ **High Performance**: about 1.3M messages/sec to one actor, more through a pool, about 10 µs per ask
 - 📊 **Built-in Observability**: Comprehensive metrics, tracing, and monitoring
-- 🎛️ **Actor Pooling**: Scale with worker pools and round-robin routing
+- 🎛️ **Actor Pooling**: Worker pools with pluggable routing; pool `Isolated` workers for parallelism
 - 💾 **Memory Efficient**: about 1.7 KB per idle actor
 - 🔍 **Dead Letter Queue**: Handle undeliverable messages gracefully
 - 🚀 **Pure Dart**: no platform channels or native code; the only runtime dependencies are `uuid` and `meta`
@@ -31,7 +31,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dactor: ^2.0.0
+  dactor: ^2.2.0
 ```
 
 ### Basic Example
@@ -95,6 +95,15 @@ void main() async {
 The same file is in `example/gen_server_example.dart`. A `GenServer` is an ordinary actor underneath. You can also extend `Actor` directly and handle whatever arrives in `onMessage(dynamic message)`; the rest of this document mostly does, and the two styles mix freely in one system.
 
 ## 📚 Core Concepts
+
+### Execution Model
+
+Dactor runs every actor on the isolate that created the system, on Dart's ordinary event loop.
+
+- **One message at a time per actor.** An actor does not get its next message until `onMessage` for the current one has completed, so its fields need no locking.
+- **`await` lets other actors run.** While a handler awaits, other actors handle their messages; the awaiting actor's own mailbox waits. Code after the `await` may therefore see a world that other actors have changed.
+- **Concurrency, not parallelism.** Many actors interleave on one thread. A handler that computes for a long time without awaiting holds up every actor in the system.
+- **Parallelism is opt-in.** Wrap an actor in `Isolated` to give it its own isolate, and pool `Isolated` workers to use several cores (see [Actors in Their Own Isolate](#-actors-in-their-own-isolate)).
 
 ### Actor Lifecycle
 
@@ -595,9 +604,9 @@ Deliberate differences:
 
 Not there: ETS, DETS, Mnesia, `observer` and a remote shell.
 
-## ⚡ Actor Pooling for Scalability
+## ⚡ Actor Pooling
 
-Scale your actors with worker pools:
+Spread messages over a pool of identical workers:
 
 ```dart
 // Create a pool of 4 worker actors
@@ -1093,10 +1102,14 @@ Available metrics:
 - `actors.active` - Current active actors
 - `actors.stopped` - Total actors stopped
 - `actors.failed` - Total actor failures
+- `actors.restarted` - Total restarts in place
+- `actors.killed` - Total actors killed
+- `actors.escalated` - Failures passed up to the parent
 - `messages.processed` - Total messages processed
 - `messages.processing_time` - Message processing latencies
 - `dead_letters` - Undeliverable messages
-- `mailbox.size` - Current mailbox sizes
+- `mailbox.size` - Current mailbox sizes, tagged with `actorId`
+- `mailbox.overflow` - Messages a full mailbox turned away, tagged with `actorId`
 
 ## 🔍 Dead Letter Queue
 
@@ -1162,23 +1175,20 @@ class GameEntity extends Actor {
 
   @override
   Future<void> onMessage(dynamic message) async {
-    switch (message.runtimeType) {
-      case MoveCommand:
-        final move = message as MoveCommand;
-        x += move.deltaX;
-        y += move.deltaY;
+    switch (message) {
+      case MoveCommand(:final deltaX, :final deltaY):
+        x += deltaX;
+        y += deltaY;
         // Notify other systems
-        context.system.eventBus.publish(EntityMoved(context.self, x, y));
-        break;
-        
-      case DamageCommand:
-        final damage = message as DamageCommand;
-        health -= damage.amount;
+        context.publish(EntityMoved(context.self, x, y));
+
+      case DamageCommand(:final amount):
+        health -= amount;
         if (health <= 0) {
-          context.system.eventBus.publish(EntityDestroyed(context.self));
-          context.stop();
+          context.publish(EntityDestroyed(context.self));
+          // Not awaited: the stop waits for this handler to finish.
+          context.system.stop(context.self);
         }
-        break;
     }
   }
 }
@@ -1191,29 +1201,23 @@ class OrderService extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
     if (message is ProcessOrder) {
+      // Look the services up by id; getActor returns null if one is not running.
+      ActorRef service(String id) => context.system.getActor(id)!;
       try {
-        // Validate order
-        final validation = await context.system
-            .actorOf('validation-service')
-            .ask(ValidateOrder(message.order), Duration(seconds: 5));
-            
+        final validation = await service('validation-service')
+            .ask<Validation>(ValidateOrder(message.order), Duration(seconds: 5));
+
         if (validation.isValid) {
-          // Process payment
-          final payment = await context.system
-              .actorOf('payment-service')
-              .ask(ProcessPayment(message.order), Duration(seconds: 10));
-              
+          final payment = await service('payment-service')
+              .ask<Payment>(ProcessPayment(message.order), Duration(seconds: 10));
+
           if (payment.successful) {
-            // Ship order
-            context.system
-                .actorOf('shipping-service')
-                .tell(ShipOrder(message.order));
+            service('shipping-service').tell(ShipOrder(message.order));
           }
         }
       } catch (e) {
-        // Handle service failures
-        context.system
-            .actorOf('notification-service')
+        // A timeout, or a service that is not running
+        service('notification-service')
             .tell(OrderFailed(message.order, e.toString()));
       }
     }
@@ -1230,6 +1234,7 @@ final config = ActorSystemConfig(
   // Ask pattern configuration
   askConfig: AskConfig(
     defaultTimeout: Duration(seconds: 5),
+    enableRetries: true, // retries are off by default
     maxRetries: 3,
     retryBackoffBase: Duration(milliseconds: 100),
   ),
@@ -1522,7 +1527,7 @@ void main() {
 }
 ```
 
-The `InMemoryTraceCollector` stores a list of `TraceEvent` objects for each message, under an id the runtime gives it, keeping at most `maxEvents` (default 10,000) and dropping the oldest correlation ids first. Each event records what happened to the message (e.g., `sent`, `processed`, `replied`) and which actor was involved.
+The `InMemoryTraceCollector` stores a list of `TraceEvent` objects for each message, under an id the runtime gives it, keeping at most `maxEvents` (default 10,000) and dropping the oldest correlation ids first. Each event records what happened to the message (`sent` and `processed`) and which actor was involved.
 
 ## 🎯 Best Practices
 
@@ -1546,10 +1551,40 @@ class BadMessage {
 
 ### 2. Use Supervision Hierarchies
 ```dart
-// Create supervision trees for fault isolation
-final supervisor = await system.spawn('app-supervisor', () => AppSupervisor());
-final dbSupervisor = await supervisor.supervise('db-supervisor', () => DbSupervisor());
-final worker = await dbSupervisor.supervise('db-worker', () => DbWorker());
+// Create supervision trees for fault isolation: each supervisor starts
+// its children in preStart, so they come back when it is restarted.
+class AppSupervisor extends SupervisorActor {
+  AppSupervisor()
+      : super(OneForOneStrategy(
+            decider: (_, __) => SupervisionDecision.restart));
+
+  @override
+  Future<void> preStart() async {
+    super.preStart();
+    await supervise('db', () => DbSupervisor());
+  }
+
+  @override
+  Future<void> onMessage(dynamic message) async {}
+}
+
+class DbSupervisor extends SupervisorActor {
+  DbSupervisor()
+      : super(OneForOneStrategy(
+            decider: (_, __) => SupervisionDecision.restart));
+
+  @override
+  Future<void> preStart() async {
+    super.preStart();
+    await supervise('worker', () => DbWorker());
+  }
+
+  @override
+  Future<void> onMessage(dynamic message) async {}
+}
+
+await system.spawn('app', () => AppSupervisor());
+final worker = system.getActor('app/db/worker');
 ```
 
 ### 3. Configure Ask Pattern Appropriately
@@ -1600,19 +1635,23 @@ class PlayerMove extends GameMessage {
 class ContextActor extends Actor {
   @override
   Future<void> onMessage(dynamic message) async {
-    // Access actor context
     print('My ID: ${context.self.id}');
-    print('Parent: ${context.parent?.id}');
-    print('System: ${context.system}');
-    
-    // Create child actors
-    final child = await context.actorOf('child', () => ChildActor());
-    
-    // Stop child actors
-    await context.stop(child);
-    
-    // Access children
-    print('Children: ${context.children.map((c) => c.id)}');
+    print('From: ${context.sender?.id}'); // null for a message from outside any actor
+
+    // Start another actor and get told when it ends. context.spawn creates a
+    // top-level actor; for a supervised child, extend SupervisorActor and
+    // call supervise.
+    final helper = await context.spawn('helper', () => HelperActor());
+    context.watch(helper);
+
+    // Pass a message on, keeping its original sender
+    context.forward(helper, message);
+
+    // Schedule a message to yourself
+    context.timers.startSingleTimer('tick', 'tick', Duration(seconds: 1));
+
+    // Stop another actor through the system
+    await context.system.stop(helper);
   }
 }
 ```
@@ -1655,7 +1694,7 @@ class ContextActor extends Actor {
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+Issues and pull requests are welcome on [GitHub](https://github.com/stephanfeb/dactor).
 
 ## 📄 License
 

@@ -1,3 +1,15 @@
+## 2.2.1
+
+- **README corrected.** New "Execution Model" section: one isolate, one
+  message at a time per actor, `await` lets other actors run, parallelism
+  through `Isolated`. Removed APIs that never existed (`context.parent`,
+  `context.children`, `context.actorOf`, `context.stop`,
+  `system.actorOf`, `supervise` on an `ActorRef`), the `replied` trace
+  event and the missing contributing guide. The pool section no longer
+  promises scalability from a single isolate, the configuration example
+  turns retries on, and the metrics list names every metric that is
+  recorded.
+
 ## 2.2.0
 
 - **Mailboxes can be bounded.** `MailboxConfig(capacity:, overflow:)` sets
