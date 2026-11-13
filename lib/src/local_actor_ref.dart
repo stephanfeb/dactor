@@ -64,7 +64,7 @@ class LocalActorRef implements ActorRef {
       if (_tracing) {
         _tracer.record(TraceEvent(envelope.traceId, 'sent', this, payload));
       }
-      _mailbox.enqueue(envelope);
+      _mailbox.enqueue(envelope, limited: !Sending.isSystem);
     } else {
       _deadLetterQueue.enqueue(DeadLetter(payload, sender, this));
     }
@@ -75,7 +75,8 @@ class LocalActorRef implements ActorRef {
   @internal
   void redeliver(Envelope envelope) {
     if (_isAlive) {
-      _mailbox.enqueue(envelope);
+      // It was let in once already.
+      _mailbox.enqueue(envelope, limited: false);
     } else {
       _deadLetterQueue
           .enqueue(DeadLetter(envelope.payload, envelope.sender, this));

@@ -13,6 +13,7 @@ import 'package:dactor/src/local_actor_ref.dart';
 import 'package:dactor/src/sending.dart';
 import 'package:dactor/src/dead_letter_queue.dart';
 import 'package:dactor/src/mailbox.dart';
+import 'package:dactor/src/mailbox_config.dart';
 import 'package:dactor/src/metrics/metrics.dart';
 import 'package:dactor/src/logging/logging.dart';
 import 'package:dactor/src/ask_config.dart';
@@ -251,6 +252,9 @@ class LocalActorSystem implements ActorSystem {
   @override
   final TraceCollector tracer;
 
+  /// The mailbox of an actor spawned without its own [MailboxConfig].
+  final MailboxConfig _defaultMailbox;
+
   /// False for the no-op collectors, so that the hot path builds no trace
   /// events, gauge tags or stopwatches that nothing would read.
   late final bool _tracing = tracer is! NoOpTraceCollector;
@@ -306,6 +310,7 @@ class LocalActorSystem implements ActorSystem {
         logger = config?.logCollector ?? ConsoleLogCollector(),
         askConfig = config?.askConfig ?? AskConfig(),
         _stopTimeout = config?.stopTimeout ?? const Duration(seconds: 5),
+        _defaultMailbox = config?.mailbox ?? MailboxConfig.unbounded,
         _maxMessagesPerTurn = config?.maxMessagesPerTurn ?? 128,
         _maxTurnMicros =
             (config?.maxTurnDuration ?? const Duration(milliseconds: 4))
@@ -397,11 +402,15 @@ class LocalActorSystem implements ActorSystem {
     T Function() actorFactory, {
     SupervisionStrategy? supervision,
     Pool? pool,
+    MailboxConfig? mailbox,
   }) {
     return spawnAndGetActor(
       id,
-      pool != null ? () => RouterActor(pool, actorFactory) : actorFactory,
+      pool != null
+          ? () => RouterActor(pool, actorFactory, mailbox)
+          : actorFactory,
       supervision: supervision,
+      mailbox: mailbox,
     ).then((spawned) => spawned.ref);
   }
 
@@ -409,8 +418,10 @@ class LocalActorSystem implements ActorSystem {
     String id,
     T Function() actorFactory, {
     SupervisionStrategy? supervision,
+    MailboxConfig? mailbox,
   }) {
-    return _sysAsync(() => _spawn(id, actorFactory, supervision: supervision));
+    return _sysAsync(() =>
+        _spawn(id, actorFactory, supervision: supervision, mailbox: mailbox));
   }
 
   /// Spawns `'$parentId/$childId'` as a supervised child of [parentId].
@@ -424,6 +435,7 @@ class LocalActorSystem implements ActorSystem {
     Actor Function() actorFactory, {
     SupervisionStrategy? supervision,
     Duration? stopTimeout,
+    MailboxConfig? mailbox,
   }) {
     return _sysAsync(() async {
       if (childId.isEmpty || childId.contains('/')) {
@@ -438,7 +450,8 @@ class LocalActorSystem implements ActorSystem {
       final spawned = await _spawn('$parentId/$childId', actorFactory,
           supervision: supervision,
           parentId: parentId,
-          stopTimeout: stopTimeout);
+          stopTimeout: stopTimeout,
+          mailbox: mailbox);
       return spawned.ref;
     });
   }
@@ -491,6 +504,7 @@ class LocalActorSystem implements ActorSystem {
     SupervisionStrategy? supervision,
     String? parentId,
     Duration? stopTimeout,
+    MailboxConfig? mailbox,
   }) async {
     if (_isShutdown) {
       throw StateError('Actor system is shutdown');
@@ -503,12 +517,20 @@ class LocalActorSystem implements ActorSystem {
     }
 
     final actor = actorFactory();
-    final mailbox = Mailbox(id, scheduleMailbox,
-        onGauge: _measuring ? metrics.gauge : null);
-    final actorRef =
-        LocalActorRef(id, mailbox, deadLetterQueue, tracer, askConfig);
-    final info = _ActorInfo(
-        _newIncarnation(id, actor), actorFactory, supervision, mailbox,
+    final config = mailbox ?? _defaultMailbox;
+    late final LocalActorRef actorRef;
+    late final _ActorInfo info;
+    final box = Mailbox(id, scheduleMailbox,
+        onGauge: _measuring ? metrics.gauge : null,
+        config: config,
+        onOverflow: config.capacity == null
+            ? null
+            : (dropped, {required fail}) => _overflowed(
+                info, actorRef, dropped, config.capacity!,
+                fail: fail));
+    actorRef = LocalActorRef(id, box, deadLetterQueue, tracer, askConfig);
+    info = _ActorInfo(
+        _newIncarnation(id, actor), actorFactory, supervision, box,
         parentId: parentId)
       ..stopTimeout = stopTimeout;
 
@@ -534,6 +556,21 @@ class LocalActorSystem implements ActorSystem {
     metrics.gauge('actors.active', _actors.length.toDouble());
 
     return (ref: actorRef, actor: actor);
+  }
+
+  /// A full mailbox turned [dropped] away.
+  void _overflowed(
+      _ActorInfo info, LocalActorRef ref, Envelope dropped, int capacity,
+      {required bool fail}) {
+    metrics.increment('mailbox.overflow', tags: {'actorId': ref.id});
+    deadLetterQueue
+        .enqueue(DeadLetter(_unwrapTick(dropped.payload), dropped.sender, ref));
+    if (!fail || !identical(_actorInfo[ref.id], info) || !info.started) {
+      return;
+    }
+    final inc = info.inc;
+    _sys(() => _fail(
+        info, ref, inc, MailboxOverflow(ref.id, capacity), StackTrace.current));
   }
 
   _Incarnation _newIncarnation(String id, Actor actor) =>

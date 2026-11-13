@@ -151,6 +151,30 @@ In tests, `probe.send(actor, message)` from `dactor_test` does the same with a p
 
 `LocalMessage`, `AskableMessage` and `AskableResponse` are deprecated and will be removed in 3.0. A `LocalMessage` that is told is unwrapped to its payload, and the sender it carries is ignored.
 
+### Mailbox Capacity
+
+Mailboxes are unbounded unless you give them a capacity. A producer that outpaces its consumer then turns messages away instead of filling memory:
+
+```dart
+// For one actor
+final logger = await system.spawn('logger', () => LogWriter(),
+    mailbox: MailboxConfig(capacity: 1000));
+
+// For every actor that does not set its own
+final system = LocalActorSystem(ActorSystemConfig(
+    mailbox: MailboxConfig(capacity: 10000)));
+```
+
+What happens to a message that does not fit is the `overflow` policy:
+
+| Policy | The message that does not fit |
+|--------|-------------------------------|
+| `OverflowPolicy.dropNewest` (default) | The new message goes to the dead letters |
+| `OverflowPolicy.dropOldest` | The oldest waiting message goes to the dead letters; the new one is queued |
+| `OverflowPolicy.fail` | The new message goes to the dead letters and the actor fails with `MailboxOverflow`, for its supervisor to decide |
+
+Messages from the runtime itself, such as `Terminated` and supervision, are always accepted. Each message turned away is counted under the `mailbox.overflow` metric. An `ask` whose request is turned away times out. `supervise`, `ChildSpec` and pools take a `mailbox:` too; a pool passes it on to its workers.
+
 ## 🎯 Ask Pattern with Reliability
 
 The ask pattern provides reliable request-response messaging with configurable retries:
@@ -1212,12 +1236,12 @@ final config = ActorSystemConfig(
   
   // Metrics collection
   metricsCollector: InMemoryMetricsCollector(),
-  
-  // Dispatcher configuration
-  dispatcherConfig: DispatcherConfig(
-    corePoolSize: 4,
-    maximumPoolSize: 8,
-  ),
+
+  // Every mailbox holds at most 10,000 messages (unbounded by default)
+  mailbox: MailboxConfig(capacity: 10000),
+
+  // How long a graceful stop waits for the handler in flight
+  stopTimeout: Duration(seconds: 5),
 );
 
 final system = ActorSystem.create(config);

@@ -1,6 +1,7 @@
 import 'package:dactor/src/actor.dart';
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/exit_reason.dart';
+import 'package:dactor/src/mailbox_config.dart';
 import 'package:dactor/src/local_actor_system.dart';
 import 'package:dactor/src/supervision.dart';
 
@@ -47,9 +48,10 @@ class SupervisorActor extends Actor implements Supervisor {
     T Function() actorFactory, {
     RestartType restart = RestartType.permanent,
     Duration? shutdown,
+    MailboxConfig? mailbox,
   }) {
-    return startChild(
-        ChildSpec(id, actorFactory, restart: restart, shutdown: shutdown));
+    return startChild(ChildSpec(id, actorFactory,
+        restart: restart, shutdown: shutdown, mailbox: mailbox));
   }
 
   /// Starts the child described by [spec] and takes responsibility for it.
@@ -96,6 +98,7 @@ class SupervisorActor extends Actor implements Supervisor {
       spec.start,
       supervision: strategy,
       stopTimeout: spec.shutdown,
+      mailbox: spec.mailbox,
     );
   }
 

@@ -18,6 +18,7 @@ export 'src/local_actor_ref.dart';
 export 'src/local_actor_system.dart' hide StepDelivery, StepFault;
 export 'src/local_message.dart' hide unwrapLegacy;
 export 'src/logging/logging.dart';
+export 'src/mailbox_config.dart';
 export 'src/metrics/metrics.dart';
 export 'src/one_for_one_strategy.dart';
 export 'src/rest_for_one_strategy.dart';

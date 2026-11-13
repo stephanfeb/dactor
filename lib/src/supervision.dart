@@ -4,6 +4,7 @@ import 'package:meta/meta.dart';
 import 'package:dactor/src/actor.dart';
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/exit_reason.dart';
+import 'package:dactor/src/mailbox_config.dart';
 
 /// The decision made by a supervisor when a child actor fails.
 enum SupervisionDecision { resume, restart, stop, escalate }
@@ -48,11 +49,15 @@ class ChildSpec {
   /// wait at all.
   final Duration? shutdown;
 
+  /// The child's mailbox. Null uses [ActorSystemConfig.mailbox].
+  final MailboxConfig? mailbox;
+
   const ChildSpec(
     this.id,
     this.start, {
     this.restart = RestartType.permanent,
     this.shutdown,
+    this.mailbox,
   });
 }
 

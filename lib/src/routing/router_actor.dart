@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dactor/src/actor.dart';
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/local_actor_system.dart';
+import 'package:dactor/src/mailbox_config.dart';
 import 'package:dactor/src/routing/pool.dart';
 import 'package:dactor/src/one_for_one_strategy.dart';
 import 'package:dactor/src/supervision.dart';
@@ -17,9 +18,12 @@ import 'package:dactor/src/supervisor_actor.dart';
 class RouterActor extends SupervisorActor {
   final Pool _pool;
   final Actor Function() _workerFactory;
+
+  /// The workers' mailbox. Null uses [ActorSystemConfig.mailbox].
+  final MailboxConfig? _mailbox;
   final _workers = <ActorRef>[];
 
-  RouterActor(this._pool, this._workerFactory)
+  RouterActor(this._pool, this._workerFactory, [this._mailbox])
       : super(OneForOneStrategy(decider: (error, stackTrace) {
           return SupervisionDecision.restart;
         }));
@@ -28,7 +32,8 @@ class RouterActor extends SupervisorActor {
   Future<void> preStart() async {
     super.preStart();
     for (var i = 0; i < _pool.workerCount; i++) {
-      _workers.add(await supervise('worker-$i', _workerFactory));
+      _workers
+          .add(await supervise('worker-$i', _workerFactory, mailbox: _mailbox));
     }
     if (context.system case final LocalActorSystem system) {
       system.routeDirectly(context.self, _pick);

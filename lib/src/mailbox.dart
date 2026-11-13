@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'package:meta/meta.dart';
 
 import 'package:dactor/src/actor_ref.dart';
+import 'package:dactor/src/mailbox_config.dart';
 
 /// A message on its way to an actor, with the sender the runtime stamped on
 /// it. Actors never see this: `onMessage` gets the [payload] and
@@ -44,22 +45,47 @@ class Mailbox {
   /// Set by the actor system: the actor is handling one of its messages.
   bool processing = false;
 
+  final MailboxConfig _config;
+
+  /// Told of each message a full mailbox turned away; [fail] is true under
+  /// [OverflowPolicy.fail].
+  final void Function(Envelope dropped, {required bool fail})? _onOverflow;
+
   Mailbox(
     this.actorId,
     this._onSchedule, {
     void Function(String name, double value, {Map<String, String>? tags})?
         onGauge,
-  }) : _onGauge = onGauge;
+    MailboxConfig config = MailboxConfig.unbounded,
+    void Function(Envelope dropped, {required bool fail})? onOverflow,
+  })  : _onGauge = onGauge,
+        _config = config,
+        _onOverflow = onOverflow;
 
-  void enqueue(Envelope message) {
-    if (!_isDisposed) {
-      _queue.add(message);
-      _onGauge?.call('mailbox.size', _queue.length.toDouble(), tags: _tags);
-      _onSchedule(this);
+  /// Queues a user message. One from the runtime ([limited] false), such as
+  /// a `Terminated`, is accepted even when the mailbox is full.
+  void enqueue(Envelope message, {bool limited = true}) {
+    if (_isDisposed) return;
+    final capacity = _config.capacity;
+    if (limited && capacity != null && _queue.length >= capacity) {
+      switch (_config.overflow) {
+        case OverflowPolicy.dropNewest:
+          _onOverflow?.call(message, fail: false);
+          return;
+        case OverflowPolicy.fail:
+          _onOverflow?.call(message, fail: true);
+          return;
+        case OverflowPolicy.dropOldest:
+          _onOverflow?.call(_queue.removeFirst(), fail: false);
+      }
     }
+    _queue.add(message);
+    _onGauge?.call('mailbox.size', _queue.length.toDouble(), tags: _tags);
+    _onSchedule(this);
   }
 
-  /// Queues a user message ahead of the other user messages.
+  /// Queues a user message ahead of the other user messages. Not limited by
+  /// the capacity: only the runtime uses it.
   void enqueueFirst(Envelope message) {
     if (!_isDisposed) {
       _queue.addFirst(message);

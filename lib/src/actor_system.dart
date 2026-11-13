@@ -8,6 +8,7 @@ import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/local_actor_system.dart';
 import 'package:dactor/src/supervision.dart';
 import 'package:dactor/src/event_bus.dart';
+import 'package:dactor/src/mailbox_config.dart';
 
 /// A system for managing actors.
 ///
@@ -24,6 +25,7 @@ abstract class ActorSystem {
     T Function() actorFactory, {
     SupervisionStrategy? supervision,
     Pool? pool,
+    MailboxConfig? mailbox,
   });
 
   /// Stops the specified actor.
@@ -97,6 +99,10 @@ class ActorSystemConfig {
   /// at the `await` it is suspended on. Defaults to 5 seconds.
   final Duration? stopTimeout;
 
+  /// The mailbox of every actor spawned without one of its own. Unbounded
+  /// by default.
+  final MailboxConfig mailbox;
+
   ActorSystemConfig({
     this.metricsCollector,
     this.traceCollector,
@@ -107,6 +113,7 @@ class ActorSystemConfig {
     this.maxTurnDuration,
     this.blockingHandlerThreshold,
     this.stopTimeout,
+    this.mailbox = MailboxConfig.unbounded,
   }) : askConfig = askConfig ?? AskConfig();
 
   /// Creates a development-friendly configuration with longer timeouts and more retries.

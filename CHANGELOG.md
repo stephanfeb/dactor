@@ -1,3 +1,20 @@
+## 2.2.0
+
+- **Mailboxes can be bounded.** `MailboxConfig(capacity:, overflow:)` sets
+  how many messages an actor's mailbox holds, and what happens to one that
+  does not fit: `dropNewest` (to the dead letters, the default),
+  `dropOldest`, or `fail` (the actor fails with `MailboxOverflow` and its
+  supervisor decides). Set it for every actor with
+  `ActorSystemConfig.mailbox`, or for one with `spawn(mailbox:)`,
+  `supervise(mailbox:)` or `ChildSpec(mailbox:)`; a pool passes it on to
+  its workers. Mailboxes stay unbounded by default. Messages from the
+  runtime (`Terminated`, `ExitSignal`, supervision) are always accepted.
+  New metric `mailbox.overflow`.
+- `ActorSystem.spawn` has a new optional `mailbox:` parameter. A class that
+  implements `ActorSystem` itself needs to add it.
+- README: the configuration example no longer shows a `DispatcherConfig`,
+  which does not exist.
+
 ## 2.1.1
 
 - **Fixed: a cancelled timer's message could still arrive.** A tick that
