@@ -773,6 +773,7 @@ context.timers.activeTimers;          // List all active timer keys
 
 - **Automatic Cleanup**: Timers are automatically cancelled when actors stop or restart
 - **Key-Based Replacement**: Starting a timer with an existing key cancels the previous timer
+- **Cancel Means Cancel**: once `cancel`, `cancelAll` or a replacement returns, the old timer's message is not handled, even if it was already waiting in the mailbox
 - **Lifecycle Bound**: Timer messages are guaranteed not to be received after actor termination
 - **High Performance**: Built on Dart's efficient Timer implementation
 - **Memory Safe**: No memory leaks from cancelled or completed timers

@@ -6,6 +6,9 @@
 ///
 /// Each timer is identified by a key, and starting a new timer with an existing
 /// key will cancel the previous timer with that key.
+///
+/// A message from a timer that has since been cancelled or replaced is never
+/// handled, even if it was already waiting in the mailbox.
 abstract class TimerScheduler {
   /// Starts a single-shot timer that sends [message] to the actor after [delay].
   ///

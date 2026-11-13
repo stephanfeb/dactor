@@ -1,8 +1,28 @@
 import 'dart:async';
 
+import 'package:meta/meta.dart';
+
 import 'actor_ref.dart';
 import 'sending.dart';
 import 'timer_scheduler.dart';
+
+/// A timer's message on its way to the actor.
+///
+/// The actor is handed [message] only if the timer that sent it has not been
+/// cancelled or restarted since; otherwise the tick is dropped. This is what
+/// keeps [TimerScheduler.cancel]'s promise for a tick already queued.
+@internal
+final class TimerTick {
+  final DactorTimerScheduler _scheduler;
+  final String _key;
+  final int _generation;
+  final Object? message;
+
+  TimerTick._(this._scheduler, this._key, this._generation, this.message);
+
+  /// Whether the timer that sent this tick is still the one under its key.
+  bool get isCurrent => _scheduler._isCurrent(_key, _generation);
+}
 
 /// Internal timer entry to track timer state
 class _TimerEntry {
@@ -30,20 +50,36 @@ class _TimerEntry {
 class DactorTimerScheduler implements TimerScheduler {
   final ActorRef _self;
   final Map<String, _TimerEntry> _timers = {};
+
+  /// The generation of the timer under each key. Starting, restarting or
+  /// cancelling a key moves it on, which makes its queued ticks stale.
+  final Map<String, int> _generations = {};
   bool _disposed = false;
 
   DactorTimerScheduler(this._self);
+
+  int _nextGeneration(String key) =>
+      _generations[key] = (_generations[key] ?? 0) + 1;
+
+  bool _isCurrent(String key, int generation) =>
+      !_disposed && _generations[key] == generation;
+
+  void _send(String key, int generation, Object? message) {
+    Sending.as(
+        null, () => _self.tell(TimerTick._(this, key, generation, message)));
+  }
 
   @override
   void startSingleTimer(String key, dynamic message, Duration delay) {
     if (_disposed) return;
 
     _cancelExisting(key);
+    final generation = _nextGeneration(key);
 
     final timer = Timer(delay, () {
       if (!_disposed) {
-        Sending.as(null, () => _self.tell(message));
         _timers.remove(key);
+        _send(key, generation, message);
       }
     });
 
@@ -62,7 +98,7 @@ class DactorTimerScheduler implements TimerScheduler {
     if (_disposed) return;
 
     _cancelExisting(key);
-    _scheduleFixedDelay(key, message, delay);
+    _scheduleFixedDelay(key, _nextGeneration(key), message, delay);
   }
 
   @override
@@ -70,10 +106,11 @@ class DactorTimerScheduler implements TimerScheduler {
     if (_disposed) return;
 
     _cancelExisting(key);
+    final generation = _nextGeneration(key);
 
     final timer = Timer.periodic(interval, (_) {
       if (!_disposed && _timers.containsKey(key)) {
-        Sending.as(null, () => _self.tell(message));
+        _send(key, generation, message);
       }
     });
 
@@ -89,8 +126,7 @@ class DactorTimerScheduler implements TimerScheduler {
 
   @override
   void cancel(String key) {
-    final entry = _timers.remove(key);
-    entry?.timer.cancel();
+    _cancelExisting(key);
   }
 
   @override
@@ -99,6 +135,9 @@ class DactorTimerScheduler implements TimerScheduler {
       entry.timer.cancel();
     }
     _timers.clear();
+    for (final key in _generations.keys) {
+      _generations[key] = _generations[key]! + 1;
+    }
   }
 
   @override
@@ -113,12 +152,13 @@ class DactorTimerScheduler implements TimerScheduler {
   }
 
   /// Internal method to schedule fixed delay timers
-  void _scheduleFixedDelay(String key, dynamic message, Duration delay) {
+  void _scheduleFixedDelay(
+      String key, int generation, dynamic message, Duration delay) {
     final timer = Timer(delay, () {
       if (!_disposed && _timers.containsKey(key)) {
-        Sending.as(null, () => _self.tell(message));
+        _send(key, generation, message);
         // Schedule the next execution after this one completes
-        _scheduleFixedDelay(key, message, delay);
+        _scheduleFixedDelay(key, generation, message, delay);
       }
     });
 
@@ -132,10 +172,12 @@ class DactorTimerScheduler implements TimerScheduler {
     );
   }
 
-  /// Internal method to cancel existing timer with the same key
+  /// Cancels the timer under [key], if any, and makes its queued ticks
+  /// stale.
   void _cancelExisting(String key) {
     final existing = _timers.remove(key);
     existing?.timer.cancel();
+    if (_generations.containsKey(key)) _nextGeneration(key);
   }
 
   /// Dispose all timers - called when actor is stopped

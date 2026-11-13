@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:meta/meta.dart';
 
 import 'package:dactor/src/actor_ref.dart';
+import 'package:dactor/src/dactor_timer_scheduler.dart';
 import 'package:dactor/src/dead_letter_queue.dart';
 import 'package:dactor/src/exit_reason.dart';
 import 'package:dactor/src/mailbox.dart';
@@ -48,7 +49,8 @@ class LocalActorRef implements ActorRef {
     }
     if (_isAlive) {
       final route = this.route;
-      if (route != null && !Sending.isSystem) {
+      // A timer's tick belongs to the actor that set the timer.
+      if (route != null && !Sending.isSystem && payload is! TimerTick) {
         // Still inside the caller's send, so the worker sees the same sender.
         final target = route(payload);
         if (target != null) return target.tell(payload);

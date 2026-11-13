@@ -1,3 +1,13 @@
+## 2.1.1
+
+- **Fixed: a cancelled timer's message could still arrive.** A tick that
+  had already been queued when `cancel`, `cancelAll` or a restart of the
+  same key ran was handled anyway, breaking `TimerScheduler.cancel`'s
+  promise. Each tick now carries its timer's generation and a stale one is
+  dropped before the actor sees it. This also covers selective `receive`.
+- Fixed: after an actor restarted, a tick queued by the failed incarnation
+  reached the new one.
+
 ## 2.1.0
 
 - **Pools are as fast as a single actor.** A message told to a pool goes

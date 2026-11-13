@@ -817,6 +817,11 @@ class LocalActorSystem implements ActorSystem {
     final message =
         info.sysSuspended ? mailbox.dequeueSystem() : mailbox.dequeue();
     if (message == null) return false;
+    if (message.payload case TimerTick(isCurrent: false)) {
+      // From a timer cancelled or restarted since: dropped unseen.
+      if (!mailbox.isEmpty) scheduleMailbox(mailbox);
+      return true;
+    }
     final actorRef = _actors[mailbox.actorId]!;
 
     var crash = false;
@@ -936,7 +941,7 @@ class LocalActorSystem implements ActorSystem {
     inc.busy = true;
     inc.abandon = finish;
 
-    final payload = message.payload;
+    final payload = _unwrapTick(message.payload);
     context.sender = message.sender;
     tracer.record(TraceEvent(message.traceId, 'processed', actorRef, payload));
     if (info.traced &&
@@ -988,6 +993,10 @@ class LocalActorSystem implements ActorSystem {
     }
   }
 
+  /// The message a timer sent, or [payload] itself if no timer sent it.
+  static Object? _unwrapTick(Object? payload) =>
+      payload is TimerTick ? payload.message : payload;
+
   /// Drops every [Terminated] from [watched] waiting in [watcher]'s mailbox.
   void _flushTerminated(ActorRef watcher, ActorRef watched) {
     final mailbox = _actorInfo[watcher.id]?.mailbox;
@@ -1006,12 +1015,15 @@ class LocalActorSystem implements ActorSystem {
     final pending = info.pendingReceive;
     if (pending == null) return false;
     final match =
-        info.mailbox.takeFirstWhere((message) => pending.test(message.payload));
+        info.mailbox.takeFirstWhere((message) => switch (message.payload) {
+              TimerTick(isCurrent: false) => false,
+              final payload => pending.test(_unwrapTick(payload)),
+            });
     if (match == null) return false;
     info.pendingReceive = null;
     // From here on the handler answers the message it received.
     (info.inc.actor.context as _ActorContext).sender = match.sender;
-    pending.done.complete(match.payload);
+    pending.done.complete(_unwrapTick(match.payload));
     return true;
   }
 

@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:dactor/src/actor_ref.dart';
 import 'package:dactor/src/actor_system.dart';
 import 'package:dactor/src/clock.dart';
+import 'package:dactor/src/dactor_timer_scheduler.dart';
 import 'package:dactor/src/local_actor_system.dart';
 import 'package:dactor/src/logging/logging.dart';
 
@@ -321,7 +322,10 @@ class Simulation {
 
   StepFault _onDelivery(StepDelivery delivery) {
     final message = delivery.message;
-    final payload = message.payload;
+    final payload = switch (message.payload) {
+      TimerTick(:final message) => message,
+      final payload => payload,
+    };
     final sender = message.sender;
     final target = delivery.target;
     if (delivery.isSystem) {
