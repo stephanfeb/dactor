@@ -1,5 +1,18 @@
-## 2.0.1
+## 2.1.0
 
+- **Pools are as fast as a single actor.** A message told to a pool goes
+  straight to a worker instead of through the router's mailbox: about
+  900k msg/s with four workers, up from about 480k. The router's mailbox
+  is still used, keeping order, while the router is starting, restarting,
+  suspended or traced, or has messages queued. The README's 49k msg/s
+  figure for pools was an artifact of the benchmark, which waited a fixed
+  two seconds; it now waits for the last message.
+- **`RoutingLogic` decides.** It has a `select(routeeCount, message)`
+  method, which the router calls for every message. `Pool.logic` used to
+  be ignored. The default still takes the workers in turn.
+- A pool's router no longer watches its workers. A worker that ended for
+  good used to have its `Terminated` passed on to another worker as an
+  ordinary message.
 - **Fixed: `context.receive` left `context.sender` pointing at the sender of
   the message being handled.** After `receive` returns a message, `sender`
   is that message's sender, so the handler can answer it. Keep the earlier

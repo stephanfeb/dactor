@@ -32,6 +32,11 @@ class LocalActorRef implements ActorRef {
   @override
   bool get isAlive => _isAlive;
 
+  /// Set on a pool's router: picks the worker a message goes to directly,
+  /// or returns null to queue it for the router as usual.
+  @internal
+  ActorRef? Function(Object? message)? route;
+
   @override
   void tell(Object? message) {
     final payload = unwrapLegacy(message);
@@ -42,6 +47,12 @@ class LocalActorRef implements ActorRef {
       return;
     }
     if (_isAlive) {
+      final route = this.route;
+      if (route != null && !Sending.isSystem) {
+        // Still inside the caller's send, so the worker sees the same sender.
+        final target = route(payload);
+        if (target != null) return target.tell(payload);
+      }
       final envelope = Envelope(payload, sender);
       _tracer.record(TraceEvent(envelope.traceId, 'sent', this, payload));
       _mailbox.enqueue(envelope);

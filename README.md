@@ -18,7 +18,7 @@ Dactor provides a robust actor system for building concurrent, fault-tolerant, a
 - 🧩 **Typed Behaviours**: `GenServer`, `GenStatem` and `TypedRef<M>` with compile-time checked messages
 - 📡 **Event Bus**: Publish-subscribe messaging for event-driven architectures
 - ⏰ **Actor Timers**: Schedule messages with single-shot, fixed-delay, and fixed-rate timers
-- ⚡ **High Performance**: about 500K messages/sec to one actor, tens of microseconds per message
+- ⚡ **High Performance**: about 900K messages/sec to one actor or through a pool, about 10 µs per ask
 - 📊 **Built-in Observability**: Comprehensive metrics, tracing, and monitoring
 - 🎛️ **Actor Pooling**: Scale with worker pools and round-robin routing
 - 💾 **Memory Efficient**: about 1.7 KB per idle actor
@@ -588,6 +588,23 @@ for (int i = 0; i < 100; i++) {
   router.tell('task_$i');
 }
 ```
+
+A message told to the pool goes straight to a worker, with its sender, without waiting in the router's mailbox. The router supervises the workers and restarts one that fails.
+
+Choose the worker with a `RoutingLogic`; the default, `RoundRobinRoutingLogic`, takes the workers in turn:
+
+```dart
+class ByKey extends RoutingLogic {
+  @override
+  int select(int routeeCount, Object? message) =>
+      message is Job ? message.key.hashCode % routeeCount : 0;
+}
+
+final pool = await system.spawn('jobs', () => JobWorker(),
+    pool: Pool(workerCount: 4, logic: ByKey()));
+```
+
+All workers share one isolate, so a pool spreads state and failures, not CPU time. For work that should run in parallel, pool `Isolated` workers: `system.spawn('p', () => Isolated(Worker.new), pool: Pool(workerCount: 4))`.
 
 ## ⏰ Actor Timers for Scheduled Messages
 
@@ -1209,8 +1226,8 @@ final system = ActorSystem.create(config);
 
 Dactor is designed for high performance:
 
-- **Throughput**: about 500,000 messages/second to one actor; about 49,000 through a round-robin pool, whose router is the bottleneck
-- **Latency**: about 25 μs per message to one actor, 8 μs through a pool
+- **Throughput**: about 900,000 messages/second to one actor, and about the same through a round-robin pool
+- **Latency**: about 10 μs for an `ask` round trip
 - **Memory**: about 1.7 KB per idle actor
 - **Scalability**: Supports thousands of concurrent actors
 
@@ -1220,13 +1237,9 @@ Run the benchmarks:
 dart test test/benchmark/
 ```
 
-Results on an Apple silicon laptop, Dart 3.11, in the test runner (JIT):
+The test files time one cold run each. For steadier figures, `tool/probes/pool_throughput.dart` in the repository warms up and alternates between one actor and pools of 1, 4 and 16 workers. On an Apple silicon laptop with Dart 3.11:
 ```
-Single Actor - Processed 100000 messages in 200ms
-Single Actor - Throughput: 500000.00 msg/sec
-
-Pooled Actor - Processed 100000 messages in 2035ms
-Pooled Actor - Throughput: 49140.05 msg/sec
+single 893k  pool(1) 856k  pool(4) 978k  pool(16) 1013k
 ```
 
 ## 🧪 Testing Your Actors

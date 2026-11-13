@@ -440,6 +440,37 @@ class LocalActorSystem implements ActorSystem {
     });
   }
 
+  /// Lets messages told to [router] go straight to the worker [pick] chooses,
+  /// skipping the router's mailbox; a null [pick] turns this off.
+  ///
+  /// The shortcut steps aside, and the router's mailbox is used, whenever the
+  /// router would not take a message at once: before its `preStart` has
+  /// finished, while it restarts or waits for a supervision decision, while
+  /// `sys` suspends or traces it, or while its mailbox still holds messages,
+  /// which keeps those ahead of later ones.
+  @internal
+  void routeDirectly(
+      ActorRef router, ActorRef? Function(Object? message)? pick) {
+    final ref = _actors[router.id];
+    final info = _actorInfo[router.id];
+    if (ref == null || info == null || !identical(ref, router)) return;
+    if (pick == null) {
+      ref.route = null;
+      return;
+    }
+    ref.route = (message) {
+      if (!identical(_actorInfo[router.id], info) ||
+          !info.started ||
+          info.suspended ||
+          info.sysSuspended ||
+          info.traced ||
+          !info.mailbox.isEmpty) {
+        return null;
+      }
+      return pick(message);
+    };
+  }
+
   /// The live children of the actor with [id], in start order.
   @internal
   List<ActorRef> childrenOf(String id) {

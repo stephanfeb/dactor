@@ -50,18 +50,21 @@ void main() {
     });
 
     test('measures message throughput for a pooled actor', () async {
-      final pool = Pool(workerCount: 4);
-      final pooledActor = await system
-          .spawn('pooled-benchmark', () => BenchmarkActor(), pool: pool);
       const messageCount = 100000;
+      final done = Completer<void>();
+      var handled = 0;
+      final pooledActor = await system.spawn(
+          'pooled-benchmark',
+          () => _Counting(() {
+                if (++handled == messageCount) done.complete();
+              }),
+          pool: Pool(workerCount: 4));
       final stopwatch = Stopwatch()..start();
 
       for (var i = 0; i < messageCount; i++) {
         pooledActor.tell(i);
       }
-
-      // Wait for all messages to be processed
-      await Future.delayed(const Duration(seconds: 2));
+      await done.future.timeout(const Duration(seconds: 5));
 
       stopwatch.stop();
       final elapsed = stopwatch.elapsedMilliseconds;
@@ -72,4 +75,13 @@ void main() {
           'Pooled Actor - Throughput: ${throughput.toStringAsFixed(2)} msg/sec');
     });
   });
+}
+
+/// Calls [onHandled] for every message.
+class _Counting extends Actor {
+  final void Function() onHandled;
+  _Counting(this.onHandled);
+
+  @override
+  Future<void> onMessage(dynamic message) async => onHandled();
 }
