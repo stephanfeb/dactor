@@ -302,11 +302,10 @@ void main() {
           equals(2)); // OrderCreated + OrderShipped
 
       // Get subscription details
-      final subscriptions = system.eventBus.subscriptions;
-      expect(subscriptions.containsKey(OrderCreated), isTrue);
-      expect(subscriptions.containsKey(OrderShipped), isTrue);
-      expect(subscriptions[OrderCreated]?.length, equals(1));
-      expect(subscriptions[OrderShipped]?.length, equals(1));
+      final actor = system.getActor('state-actor')!;
+      expect(system.eventBus.isSubscribed<OrderCreated>(actor), isTrue);
+      expect(system.eventBus.isSubscribed<OrderShipped>(actor), isTrue);
+      expect(system.eventBus.isSubscribed<PaymentProcessed>(actor), isFalse);
     });
   });
 

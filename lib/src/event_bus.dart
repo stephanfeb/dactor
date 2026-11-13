@@ -1,9 +1,12 @@
 import 'dart:async';
 
+import 'package:meta/meta.dart';
+
 import 'package:dactor/src/actor_ref.dart';
 
 /// A message to subscribe to events of a specific type.
-@Deprecated('Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
+@Deprecated(
+    'Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
 class Subscribe<T> {
   final ActorRef subscriber;
   final Type eventType;
@@ -15,7 +18,8 @@ class Subscribe<T> {
 }
 
 /// A message to unsubscribe from events of a specific type.
-@Deprecated('Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
+@Deprecated(
+    'Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
 class Unsubscribe<T> {
   final ActorRef subscriber;
   final Type eventType;
@@ -27,7 +31,8 @@ class Unsubscribe<T> {
 }
 
 /// A message to publish an event to all subscribers.
-@Deprecated('Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
+@Deprecated(
+    'Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
 class Publish<T> {
   final T event;
 
@@ -38,7 +43,8 @@ class Publish<T> {
 }
 
 /// Represents an active event subscription.
-@Deprecated('Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
+@Deprecated(
+    'Unused by the event bus; use EventBus.subscribe, unsubscribe and publish. Will be removed in 3.0.')
 class EventSubscription {
   final ActorRef subscriber;
   final Type eventType;
@@ -154,7 +160,8 @@ class EventBus {
   }
 
   /// Remove all subscriptions for a given actor.
-  /// This should be called when an actor is terminated to prevent memory leaks.
+  /// The actor system calls this when an actor stops.
+  @internal
   void cleanup(ActorRef actor) {
     final subscribedTypes = _subscriberTypes[actor];
     if (subscribedTypes != null) {
@@ -174,7 +181,13 @@ class EventBus {
     }
   }
 
+  /// Whether [actor] is subscribed to exactly the type [T].
+  bool isSubscribed<T>(ActorRef actor) =>
+      _subscriptions[T]?.contains(actor) ?? false;
+
   /// Get all current subscriptions for debugging/monitoring.
+  @Deprecated('Hands out every subscriber\'s ref. Use isSubscribed, '
+      'subscriptionCount or subscriberCount. Will be removed in 3.0.')
   Map<Type, Set<ActorRef>> get subscriptions =>
       Map.unmodifiable(_subscriptions);
 

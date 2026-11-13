@@ -67,7 +67,7 @@ void main() {
       // Give the system a moment to process the message
       await Future.delayed(Duration.zero);
 
-      final deadLetter = system.deadLetterQueue.dequeue();
+      final deadLetter = system.deadLetterQueue.toList().firstOrNull;
       expect(deadLetter, isA<DeadLetter>());
     });
 

@@ -416,6 +416,9 @@ class LocalActorSystem implements ActorSystem {
     ).then((spawned) => spawned.ref);
   }
 
+  /// Like [spawn], and also returns the live [Actor] instance. For tests:
+  /// anything else should talk to the actor only through its ref.
+  @visibleForTesting
   Future<({ActorRef ref, Actor actor})> spawnAndGetActor<T extends Actor>(
     String id,
     T Function() actorFactory, {
@@ -1503,7 +1506,7 @@ class LocalActorSystem implements ActorSystem {
       return;
     }
     _eventBus.cleanup(actorRef);
-    actorRef.stop(reason);
+    actorRef.terminate(reason);
     _actors.remove(actorRef.id);
     _actorInfo.remove(actorRef.id);
     final parentId = info?.parentId;

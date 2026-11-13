@@ -118,7 +118,13 @@ abstract class Actor {
   /// being handled, timers, and the rest of what an actor can reach.
   ///
   /// Set by the system before `preStart`. Not available in the constructor.
-  late ActorContext context;
+  ActorContext get context => _context;
+
+  /// Only the actor system sets the context.
+  @internal
+  set context(ActorContext value) => _context = value;
+
+  late ActorContext _context;
 
   /// Called when a message is received.
   @protected

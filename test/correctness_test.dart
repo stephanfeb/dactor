@@ -108,7 +108,7 @@ void main() {
       expect(dlq.length, 3);
 
       // First message should be msg2 (msg1 was evicted)
-      final first = dlq.dequeue() as DeadLetter;
+      final first = dlq.toList().first;
       expect(first.message, 'msg2');
 
       expect(metrics.getCounter('dead_letters.evicted'), 1);

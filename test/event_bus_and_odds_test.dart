@@ -120,7 +120,7 @@ void main() {
     await settle();
     expect(seen, ['late']);
     // Following them does not take them out of the queue.
-    expect(system.deadLetterQueue.dequeue()?.message, 'late');
+    expect(system.deadLetterQueue.toList().map((l) => l.message), ['late']);
     await sub.cancel();
   });
 

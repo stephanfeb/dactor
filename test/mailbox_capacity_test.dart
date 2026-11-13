@@ -70,11 +70,13 @@ void main() {
       Future<void>.delayed(const Duration(milliseconds: 20));
 
   /// Drains the dead letters and returns their messages.
-  List<Object?> deadLetters() => [
-        for (DeadLetter? letter;
-            (letter = system.deadLetterQueue.dequeue()) != null;)
-          letter!.message
-      ];
+  List<Object?> deadLetters() {
+    final letters = [
+      for (final letter in system.deadLetterQueue.toList()) letter.message
+    ];
+    system.deadLetterQueue.clear();
+    return letters;
+  }
 
   /// Blocks [ref] in a handler, tells it [messages], then lets it go.
   Future<void> fill(ActorRef ref, List<String> messages) async {

@@ -25,6 +25,7 @@ class LocalActorRef implements ActorRef {
   final DeadLetterQueue _deadLetterQueue;
   final TraceCollector _tracer;
   final AskConfig _askConfig;
+
   /// A set: watching twice still means one `Terminated`.
   final _watchers = <ActorRef>{};
   bool _isAlive = true;
@@ -34,6 +35,7 @@ class LocalActorRef implements ActorRef {
   /// nothing.
   final bool _tracing;
 
+  @internal
   LocalActorRef(this.id, this._mailbox, this._deadLetterQueue, this._tracer,
       this._askConfig)
       : _tracing = _tracer is! NoOpTraceCollector;
@@ -221,7 +223,16 @@ class LocalActorRef implements ActorRef {
   @override
   void unwatch(ActorRef watcher) => _watchers.remove(watcher);
 
-  void stop([ExitReason reason = const NormalExit()]) {
+  /// Marks this ref dead without stopping the actor: the system still holds
+  /// it, its timers run and `postStop` is never called.
+  @Deprecated('Use ActorSystem.stop or ActorSystem.kill. Will be removed in '
+      '3.0.')
+  void stop([ExitReason reason = const NormalExit()]) => terminate(reason);
+
+  /// The system's last step in stopping the actor: the ref goes dead, the
+  /// mailbox is emptied and watchers are told.
+  @internal
+  void terminate(ExitReason reason) {
     if (!_isAlive) return;
     _isAlive = false;
     _mailbox.dispose();

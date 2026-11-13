@@ -18,6 +18,22 @@
 - An actor's timer scheduler is created on first use.
 - Deprecated: `Subscribe`, `Unsubscribe`, `Publish` and `EventSubscription`,
   which the event bus never used. They will be removed in 3.0.
+- **Less of the runtime is reachable from outside it** (audit M8). Nothing
+  is removed; each of these now gives a warning, and the deprecated ones
+  go in 3.0:
+  - `LocalActorRef.stop()` is deprecated: it marked the ref dead without
+    stopping the actor. Use `ActorSystem.stop` or `kill`. The
+    `LocalActorRef` constructor is internal.
+  - `DeadLetterQueue.dequeue()` is deprecated in favour of `toList()`, which
+    leaves the queue as it is, and `clear()`. Its constructor and `enqueue`
+    are internal.
+  - `EventBus.subscriptions` is deprecated: it handed out every
+    subscriber's ref. Use the new `isSubscribed<T>(ref)`,
+    `subscriptionCount` or `subscriberCount`. `EventBus.cleanup` is
+    internal.
+  - `spawnAndGetActor`, which returns the live `Actor`, is
+    `@visibleForTesting`.
+  - Setting `Actor.context` is internal; reading it is unchanged.
 
 ## 2.2.1
 

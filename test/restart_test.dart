@@ -192,7 +192,7 @@ void main() {
 
       s.child.tell('boom');
       await _settle();
-      expect(system.eventBus.subscriptions[_Event], contains(s.child));
+      expect(system.eventBus.isSubscribed<_Event>(s.child), isTrue);
 
       system.eventBus.publish<_Event>(_Event());
       await _settle();

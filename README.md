@@ -1128,12 +1128,12 @@ await system.stop(actor);
 // This message will go to dead letters
 actor.tell('late_message');
 
-// Check dead letter queue
-final deadLetter = system.deadLetterQueue.dequeue();
-if (deadLetter != null) {
+// The dead letters kept so far (the most recent 1,000 by default)
+for (final deadLetter in system.deadLetterQueue.toList()) {
   print('Undelivered message: ${deadLetter.message}');
   print('Intended recipient: ${deadLetter.recipient}');
 }
+system.deadLetterQueue.clear();
 
 // Or follow them as they arrive
 system.deadLetterQueue.letters.listen((letter) {

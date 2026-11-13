@@ -92,9 +92,9 @@ void main() {
       ref.tell('late');
 
       expect(system.deadLetterQueue.length, 1);
-      final letter = system.deadLetterQueue.dequeue();
+      final letter = system.deadLetterQueue.toList().first;
       expect(letter, isA<DeadLetter>());
-      expect((letter as DeadLetter).recipient.id, 'a');
+      expect(letter.recipient.id, 'a');
     });
 
     test('stops children before their parents', () async {
